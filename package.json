@@ -1,0 +1,40 @@
+{
+  "name": "truthfile",
+  "version": "0.1.0",
+  "description": "Find conflicting, stale and duplicated infra facts across your repos and coding-agent config.",
+  "license": "MIT",
+  "author": "Manish Rawal",
+  "type": "module",
+  "bin": {
+    "truthfile": "dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": "24.x"
+  },
+  "scripts": {
+    "dev": "tsx src/cli.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "commander": "^15.0.0",
+    "ignore": "^7.0.13",
+    "picocolors": "^1.1.1",
+    "smol-toml": "^1.9.1",
+    "yaml": "^2.9.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^24.19.2",
+    "eslint": "^10.13.0",
+    "tsx": "^4.23.15",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.72.0",
+    "vitest": "^5.0.5"
+  }
+}
