@@ -1,0 +1,9 @@
+{
+  "findings": [
+    { "type": "conflict", "entity": "shop", "attribute": "port", "values": ["3000", "3300"] },
+    { "type": "global-local", "entity": "shop", "attribute": "port", "value": "4000" },
+    { "type": "stale", "attribute": "ip", "value": "10.0.0.4" },
+    { "type": "duplicated", "entity": "hetzner", "attribute": "ip", "value": "100.64.1.10", "files": ["ops/CLAUDE.md", "shop/CLAUDE.md"] },
+    { "type": "secret", "files": ["shop/AGENTS.md"] }
+  ]
+}

@@ -1,0 +1,32 @@
+name: Bug or wrong finding
+description: Something broke, or a finding is wrong or missing.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: A report describes your machine. Replace host names, IPs, paths and repo names you would not post publicly, and never paste a secret.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: The command you ran and what it printed, cleaned up.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce
+      description: A small made-up folder or file that shows the problem is the fastest path to a fix.
+  - type: input
+    id: version
+    attributes:
+      label: Version and OS
+      placeholder: sync-agent-docs 0.1.0, macOS 26
+    validations:
+      required: true

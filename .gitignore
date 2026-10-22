@@ -2,6 +2,11 @@ node_modules/
 dist/
 .worktrees/
 .superpowers/
-.truthfile/
+.sync-agent-docs/
 .DS_Store
 .env*
+
+# Fixture env files are synthetic and must be committed.
+!tests/fixtures/**/.env
+CLAUDE.local.md
+docs/superpowers/
