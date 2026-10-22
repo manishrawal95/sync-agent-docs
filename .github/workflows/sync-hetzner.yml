@@ -1,0 +1,37 @@
+name: Sync to Hetzner
+
+# Push-triggered auto-sync, Vercel-style: a push here fast-forwards
+# devuser's dev checkout on the Hetzner box automatically. Provisioned by
+# ~/dev/ops/scripts/provision-repo-sync.sh -- see ~/dev/ops/docs/sync.md
+# for the shared design.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@6cae46e2d796f265265cfcf628b72a32b4d7cade  # v3
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_CLIENT_SECRET }}
+          tags: tag:ci
+
+      - name: Write deploy/sync SSH key
+        run: |
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.DEPLOY_SYNC_SSH_KEY }}" > ~/.ssh/deploy_sync_key
+          chmod 600 ~/.ssh/deploy_sync_key
+
+      - name: Sync devuser checkout
+        run: |
+          ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
+            -i ~/.ssh/deploy_sync_key devuser@100.98.85.124 "sync-agent-docs"

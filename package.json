@@ -1,12 +1,30 @@
 {
-  "name": "truthfile",
+  "name": "sync-agent-docs",
   "version": "0.1.0",
   "description": "Find conflicting, stale and duplicated infra facts across your repos and coding-agent config.",
   "license": "MIT",
   "author": "Manish Rawal",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/manishrawal95/sync-agent-docs.git"
+  },
+  "bugs": {
+    "url": "https://github.com/manishrawal95/sync-agent-docs/issues"
+  },
+  "homepage": "https://github.com/manishrawal95/sync-agent-docs#readme",
+  "keywords": [
+    "cli",
+    "claude-code",
+    "agents-md",
+    "ai-agents",
+    "coding-agents",
+    "documentation",
+    "drift",
+    "developer-tools"
+  ],
   "type": "module",
   "bin": {
-    "truthfile": "dist/cli.js"
+    "sync-agent-docs": "dist/cli.js"
   },
   "files": [
     "dist"
@@ -19,7 +37,8 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "build": "tsc -p tsconfig.build.json"
+    "build": "tsc -p tsconfig.build.json",
+    "prepublishOnly": "npm run typecheck && npm run lint && npm test && npm run build"
   },
   "dependencies": {
     "commander": "^15.0.0",

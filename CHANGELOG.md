@@ -1,5 +1,91 @@
 # Changelog
 
+## 2026-10-22
+
+- Renamed from truthfile to sync-agent-docs, so the name says what it does. The command, the npm package, the `.sync-agent-docs/` work folder, the `sync-agent-docs.json` store config, the block markers and the branch names all use the new name.
+- `doctor` reports a fact as open when the store holds another value for it too, matching `plan`, which asks about it.
+- `apply` refusing an untracked store or view file now says git does not track it, instead of blaming the store's `.gitignore`.
+- A remote URL whose password holds `?` or `#` no longer leaks part of the token into scan results; a remote with an `@` after a `?` or `#` is now left out.
+- `plan` skips asking only when a fact's values are exactly what the store holds; when the store holds another value too, approving would drop it, so plan asks.
+- A git filter that a scanned repo defines in `.git/config.worktree` no longer runs when sync-agent-docs reads that repo; the guard used to cover only `.git/config`.
+- The CLI's own usage errors and help, such as an unknown option, now drop control characters from what was typed, like every other message sync-agent-docs prints.
+- `plan` now stops when the store the last apply wrote has been moved or deleted, and asks for `--store`, instead of quietly starting an empty store and asking every question again.
+- `apply` and `compile` no longer refuse a repo because it holds an untracked file of yours; only uncommitted changes to tracked files stop them, and the untracked file is left alone.
+- `rollback` now undoes an apply that was cut off partway, either while it was writing files or just after it committed: apply records each file before writing it, and rollback moves the unfinished edits into a git stash instead of refusing. Changes apply did not write still stop it.
+- `plan` no longer asks you to approve a value the store already holds, as happened when a settled conflict came back as a plain fact once every file agreed.
+- `rollback` of an apply already merged in every repo now says nothing was rolled back and to revert by hand, instead of reporting success and marking it rolled back; its note on manual patches no longer claims they were never applied.
+- A global agent file that agrees with one side of a repo conflict (the README and `~/.claude/CLAUDE.md` both say 4000, the config says 3300) is now part of that conflict, so settling it edits or patches the global file too.
+- A value you change by hand in a view and fold in is kept; before, an answer remembered from an earlier plan for the same attribute replaced it in the same apply.
+- `doctor` no longer reports every approved `npm run` command as drift: it checks them against the package.json scripts, the way `plan` found them.
+- `plan --use-scan` refuses a scan older than a file it would edit; before, a line added above a claim moved the edit onto the wrong line.
+- `apply` refuses a `.sync-agent-docs/manual` that is a link or a file, before any branch exists, so a patch can no longer be written where the link points.
+- A git remote's password no longer reaches `scan.json`, `plan.json` or the store when it holds `@` or `/`, and a token in the remote's query string is dropped too.
+- Terminal escapes in a folder or file name can no longer reach your terminal through the plan, apply, rollback, compile or doctor output or any error the CLI prints; they are dropped as scan already did.
+- Every command given a missing path now says the path does not exist and to pass the folder that holds your repos, and one given a file says it is a file, instead of a raw `ENOENT` error or "path not found" for a file that exists.
+- The scan's next step now matches what it found: it only says to fix conflicts when there are some, and otherwise points at the plain-text secrets or the stale references.
+- `plan --help` now says `--ai` runs only the claude CLI, and `rollback --help` says it undoes the last apply or compile, matching what they do.
+- Anthropic keys (`sk-ant-api03-`, `sk-ant-admin01-`) and OpenAI project and service-account keys (`sk-proj-`, `sk-svcacct-`) are now found as plain-text secrets; short or placeholder `sk-` text in a doc is still left alone.
+- ssh config is read the way ssh reads it: `Hostname=198.51.100.8` and `Key = value` lines count, `Host web prod-web` is one host with `prod-web` as another name instead of two hosts, and the first HostName in a block wins.
+- A `wrangler.jsonc` with block comments (like the header `npm create cloudflare` writes), comments after a value or trailing commas is now read instead of being skipped as unparseable.
+- A linked git worktree inside the scanned folder is skipped and noted, since its main checkout is already scanned, so facts and questions no longer appear twice and `apply` no longer fails on a branch the two checkouts share. Submodules are still scanned.
+- `rollback` deletes only a `sync-agent-docs/apply-` or `sync-agent-docs/compile-` branch and returns only to a real branch name, so a hand-edited `applies.json` cannot make it delete `main`.
+- `apply` refuses an edit outside the scanned folder that is not a machine agent file, so a hand-edited `plan.json` cannot rewrite a script in some other repo.
+- Reading a repo no longer runs commands its own git config names: the fsmonitor hook and the repo's own filter drivers are switched off for every git call sync-agent-docs makes, status skips submodules, and blame skips textconv.
+- `scan` reports a URL password that starts with digits and a `/` (`app:2024/x@db`), while `host:5173/@vite` stays a port and a path, and it reports a UUID assigned to a secret name such as `WEBHOOK_SECRET` or `HEROKU_API_KEY`.
+- `scan` no longer calls a commit SHA, SHA-256 digest, UUID or `sha512-` integrity hash a secret, when the name it is assigned to says it is an ID (`COMMIT`, `TENANT_ID`, `buildSha`) and nothing about a key, secret or token. Any other name is still checked.
+- `apply` refuses to run when a view block was edited by hand after `plan`, instead of overwriting the edit. Run `sync-agent-docs plan` again to choose what to keep.
+- `apply` makes no branch in a repo whose files come out unchanged, so planning and applying again with nothing new leaves nothing to review.
+- `plan` keeps answers typed into `plan.json` by hand when it runs again, as long as the answer is still one of the item's options.
+- `apply` keeps each line's own ending in a file that mixes CRLF and LF, and the `cd` in a manual patch's instructions is quoted so a folder name holding `'` still works.
+- `doctor` still reports a secret left for manual rotation after edits moved it to another line, and a mistyped `doctor` option exits 2 (doctor failed), not 1 (drift).
+- `scan` still reports a URL password that holds a `/`, and checks every URL on a line, so a dev-server URL earlier on the line no longer hides a credential after it.
+- `scan` never writes the body of a private key to `scan.json`: a key block in a doc or a shell fence, or an unquoted one in `.env`, is skipped line for line, not only its BEGIN line.
+- `scan` skips a symlink in a repo that points outside the scanned folder, so a link such as `notes.md -> ~/.netrc` is never read.
+- Fewer false findings from `scan`: `http://localhost:5173/@vite/client` is not a credential, `scripts/deploy.sh:42` is neither a domain nor a port, netmasks, multicast and link-local addresses are not host IPs, a repo named like a common word (`api`, `web`) only claims lines inside itself, and a `~/` path is called stale only when its top folder exists on this machine.
+- `doctor` no longer calls a conflict new when the store already settled it. It says what the store records and which line still disagrees, and when apply could only write a patch for that file (outside git, or inside a repo but untracked) it names that patch. The patch hint stays only while the file is as apply left it, so a file edited since gets sent to `sync-agent-docs plan` instead.
+- `scan` reads a port from "listens on 3300", "binds to :8100" and "serves on 4000", so a doc that names a port without the word "port" is checked against the config. A version, date or address after the verb is not read as a port.
+- README opens with how to run a scan and a table of what sync-agent-docs reads and never reads, on disk, in programs it runs and on the network.
+- `sync-agent-docs doctor`: rechecks every file and branch against the store and exits 0 when clean, 1 on drift, 2 when it cannot run. It reports open plan items, config files that no longer back a fact, edited or stale compiled blocks and views, unmerged sync-agent-docs branches, applies whose commits went missing, and secrets still waiting on manual rotation. `.sync-agent-docs/checks.json` turns a check off or accepts a finding, `--json` prints a stable result, and `--live` (opt-in) makes one `HEAD /` request per recorded origin and TCP connects to the targets the store records.
+- `doctor --live` gives each target a hard deadline, so a server that keeps trickling bytes fails at the timeout instead of holding doctor open forever.
+- `doctor` reports an apply as lost when its branch was reset past the apply's commit and nothing merged it, even when the branch tip now matches main.
+- `doctor --live` requests only `/` on each recorded URL's origin, never the recorded path, so a HEAD can never run a route such as a cron job.
+- `doctor` notes each accepted key in `.sync-agent-docs/checks.json` that matched no finding, so stale keys can be removed, and refuses a key that names no check.
+- A secret in a file an agent-file link points at (such as `AGENTS.md` linked to `scripts/env.sh`) is no longer recorded as removed. `plan` offers rotate-manual instead of rotate-remove, notes where the secret stays, and `apply` records it as `manual` at its real location and repeats the note in its summary.
+- `sync-agent-docs compile`: writes the store's facts into each repo's agent files (CLAUDE.md, AGENTS.md, GEMINI.md, Copilot and Cursor rules) inside one marked block, on new branches that `rollback` can delete. `apply` now does the same in its own commit. A hand edit inside the block is never overwritten; `plan` asks whether to keep or discard it.
+- `scan` no longer reports a compiled block as duplicated context.
+- A sync-agent-docs block whose id appears twice in a file is refused by name, so a hand-made copy of the compiled block is never overwritten without asking.
+- sync-agent-docs markers inside a fenced code block (``` or ~~~) are read as an example, not as a block.
+- `scan` skips only a compiled block compile wrote: in one of its five files at a repo root, with a hash that matches. A copied or hand-edited block is scanned like any other text.
+- Values and entity names in views and compiled blocks are code spans, so a scanned line like `cat @~/.ssh/id_ed25519` is never a live Claude import.
+- An agent file that is a link to nothing is skipped with a note naming where it points, so compile and plan no longer fail on it or skip the whole repo.
+- `compile` skips the truth store when sync-agent-docs.json lists it as a repo, as `apply` already did, and says so.
+- `compile` refuses a repo in sync-agent-docs.json that sits outside `root`, naming it, before it writes anything.
+- An empty `.cursor/rules/sync-agent-docs.mdc` gets its `alwaysApply` frontmatter when compile fills it, so Cursor loads the rule.
+- The `@` import `plan` adds to a CLAUDE.md follows the view paths set in the store's sync-agent-docs.json.
+- `compile` names any `sync-agent-docs/apply-*` branch the truth store has not merged, so "up to date" never hides facts still waiting on a merge.
+- An agent file that links to anything other than another agent file (a script, `package.json`, a file under `.git/`) is left alone with a note naming the link and its target.
+- A code fence that never closes no longer hides the compiled block after it, so compile stops adding a fresh block on every run.
+- When only `claude` is allowed and CLAUDE.md links to AGENTS.md, compile now says it wrote the block into AGENTS.md.
+- `plan` and `apply` never edit a file reached through a link unless it is one of the five agent files: a CLAUDE.md linked to a script or a `.git` file is still scanned, but plan proposes no edit there and says why, and apply refuses such an edit from an older plan by name.
+- A CLAUDE.md that is a link to AGENTS.md stays a link: compile and apply write the block once into AGENTS.md, with the project card import, and say so.
+- `sync-agent-docs plan`: turns a scan into questions in five tiers, asks the open ones and remembers each answer, so the same question is not asked twice.
+- `sync-agent-docs apply`: writes the truth store, its generated views and the approved doc edits, each repo on a new branch. It never merges or pushes, and a file outside git gets a patch to apply by hand.
+- `sync-agent-docs rollback`: deletes the branches the last apply made and puts each repo back on its branch. It refuses if a branch holds commits apply did not make.
+- `sync-agent-docs plan --ai`: asks your own claude CLI, run with its tools off, which project an unlinked doc line is about, after showing the cost and getting a yes. Secret lines are never sent, and each suggestion becomes a question.
+- When apply fails partway, it undoes what it wrote: each repo goes back to its branch and the new branches are deleted. A file git does not track gets a patch instead of an edit, and a store that is also one of the scanned repos gets one branch and one commit.
+- The truth store must sit inside your home folder. `apply` uses the store the plan names, so pick it with `plan --store`.
+- `plan` shows each option's line changes as `- before` and `+ after` before it asks. A possible secret line shows only its file and line number.
+- When two answers change the same line, apply makes both changes in turn. If the second no longer fits after the first, it refuses and names both questions.
+- `rollback` keeps an apply branch that is already merged and says to revert it by hand.
+- Apply keeps a file's CRLF line endings, and keeps a file without a final newline that way.
+- Scans skip a repo's test data: any `fixtures`, `__fixtures__`, `testdata` or `__snapshots__` folder, and a `test` or `tests` folder at the repo root. A sample config there no longer shows up as a real app.
+- git errors name a missing repo folder instead of blaming git, and show git's own reason on one short line without URLs.
+- A store whose sync-agent-docs.json names a view or generated file outside the store is refused before anything is written, naming the file and the key.
+- Apply refuses before writing when a store or view file is one the store's git ignores. When undoing a failed apply, one repo that cannot be put back no longer stops the others, and every failure is reported.
+- A truth store inside a scanned folder is no longer read back as claims: its sync-agent-docs.json, store/ and generated views are left out of the scan, and the rest of that repo is still scanned.
+- plan, apply and rollback refuse to run when git tracks files in `.sync-agent-docs/`, since a cloned repo could use them to hide its secrets or move the store. Remove them with `git rm -r --cached .sync-agent-docs`.
+
 ## 2026-10-21
 
+- `sync-agent-docs scan`: find conflicting, stale and duplicated infra facts and plain-text secrets across repos and agent config.
 - Project created.

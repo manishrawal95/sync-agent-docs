@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security problem
+    url: https://github.com/manishrawal95/sync-agent-docs/security/advisories/new
+    about: Report it privately. Please do not open a public issue.

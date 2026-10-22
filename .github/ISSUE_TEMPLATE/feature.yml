@@ -1,0 +1,17 @@
+name: Idea or new format
+description: A config format to read, an agent file to write, or a change in behaviour.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What drifted or went wrong for you, and how you found out.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you would like it to do
+    validations:
+      required: true
