@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-10-28
+
+- compile and doctor treat a hard-linked CLAUDE.md and AGENTS.md as one file, ignore a card import shown inside a code fence, and loaded-size reports missing or out-of-root repos when the compiled check is off.
+- doctor's loaded-size finding names the imports it counted and rounds the size up, so a file just over budget never reads as 8.0 KB; it and compile no longer stop on a link loop or a non-file at an agent path.
+- `compile` no longer lists a repo's own project facts twice in CLAUDE.md: when the project card import already sits outside the block, the block leaves those facts to the card. Such CLAUDE.md blocks show as stale once; run `sync-agent-docs compile` to rewrite them.
+- New `doctor` check `loaded-size`: an agent file, with the files CLAUDE.md imports, is drift once an agent would load more than 8 KB of it every turn. Turn it off alone with `"disabled": ["loaded-size"]` in `checks.json`.
+
 ## 2026-10-22
 
 - Renamed from truthfile to sync-agent-docs, so the name says what it does. The command, the npm package, the `.sync-agent-docs/` work folder, the `sync-agent-docs.json` store config, the block markers and the branch names all use the new name.

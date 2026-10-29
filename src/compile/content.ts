@@ -8,8 +8,14 @@ import { byFact, code, factsTable } from '../views/render.js';
 export const HEADING = '## Facts from the truth store';
 export const INTRO = 'Compiled by sync-agent-docs from the truth store. Do not edit inside these markers: change the store and run sync-agent-docs compile.';
 
-/** `outside` is the file's text outside the compiled block; `card` is the project card import, if the store has one. */
-export interface FormatInput { repoPath: string; store: Store; entityIds: string[]; outside: string; card: string | null }
+export const NO_FACTS = 'No facts recorded for this repo yet.';
+export const CARD_NOTE = "This repo's own project facts are in its project card, which this file imports outside this block.";
+
+/**
+ * `outside` is the file's text outside the compiled block; `card` is the project card import, if the store has one;
+ * `project` is the repo's own project entity id; `shared` is true when the file is also another agent file on disk.
+ */
+export interface FormatInput { repoPath: string; store: Store; entityIds: string[]; outside: string; card: string | null; project: string; shared: boolean }
 
 export interface AgentCompiler {
   format: AgentFormat;
@@ -34,7 +40,37 @@ export function factsBody(store: Store, entityIds: string[]): string {
     if (!e || !facts.length) continue;
     sections.push(`### ${code(e.names[0] ?? e.id)} (${e.kind})\n\n${factsTable(facts, '')}`);
   }
-  return sections.join('\n\n') || 'No facts recorded for this repo yet.';
+  return sections.join('\n\n') || NO_FACTS;
+}
+
+/** The trimmed lines of `text` outside code fences. A fence closes only on its own character, at least as long as the opener, with nothing after it (CommonMark). */
+export function unfencedLines(text: string): string[] {
+  const lines: string[] = [];
+  let opener: { char: string; length: number } | null = null;
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    const run = /^(`{3,}|~{3,})(.*)$/.exec(line);
+    const char = run?.[1]?.[0] ?? '';
+    const length = run?.[1]?.length ?? 0;
+    if (opener) {
+      if (run && char === opener.char && length >= opener.length && run[2]?.trim() === '') opener = null;
+    } else if (run && !(char === '`' && run[2]?.includes('`'))) {
+      opener = { char, length };
+    } else {
+      lines.push(line);
+    }
+  }
+  return lines;
+}
+
+/** The `@path` lines of a CLAUDE.md that Claude Code loads: whole-line imports outside code fences. */
+export function importLines(text: string): string[] {
+  return unfencedLines(text).flatMap((line) => /^@(\S+)$/.exec(line)?.[1] ?? []);
+}
+
+/** Whether `outside` already imports the project `card` (an `@path`) on a line of its own, outside any code fence. */
+export function importsCard(outside: string, card: string | null): boolean {
+  return card !== null && unfencedLines(outside).includes(card);
 }
 
 export async function exists(path: string): Promise<boolean> {

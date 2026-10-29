@@ -53,7 +53,7 @@ The truth store is a git repo inside your home folder, `~/dev/truth` unless you 
 <!-- sync-agent-docs:end compiled -->
 ```
 
-The hash line records the block's own body, so sync-agent-docs can tell when someone edited it by hand. `CLAUDE.md` also gets an `@` import of the repo's project card, and the `.mdc` file gets Cursor frontmatter with `alwaysApply: true`. A file that is not there is only created when the repo lists that format under `formats` in the store's `sync-agent-docs.json`, for example `{ "name": "shop", "path": "shop", "formats": ["gemini"] }`; a Cursor rule is also written when the repo already has `.cursor/rules`. A secret never reaches a block: the store keeps only where a secret was found, never its value.
+The hash line records the block's own body, so sync-agent-docs can tell when someone edited it by hand. `CLAUDE.md` also gets an `@` import of the repo's project card. If you already put that import line outside the block yourself, the block leaves out the project's own facts, since the card lists them; when CLAUDE.md is the same file as another agent file (a link), the block keeps them, because Codex and Gemini do not follow `@` imports. The `.mdc` file gets Cursor frontmatter with `alwaysApply: true`. A file that is not there is only created when the repo lists that format under `formats` in the store's `sync-agent-docs.json`, for example `{ "name": "shop", "path": "shop", "formats": ["gemini"] }`; a Cursor rule is also written when the repo already has `.cursor/rules`. A secret never reaches a block: the store keeps only where a secret was found, never its value.
 
 `apply` compiles in the same commit as its other edits to each repo. `compile` on its own puts each changed repo on a new `sync-agent-docs/compile-<time>` branch with one commit, with the same checks as apply: it stops before writing if a repo has uncommitted changes, undoes everything if a step fails, and `rollback` deletes its branches. When nothing changed, it says so and makes no branch. It never merges or pushes. It leaves alone a file git ignores or does not track, and a file that is a link to somewhere outside the repo, and says so.
 
@@ -91,6 +91,7 @@ A secret is never copied into a commit, a patch, the plan or the store. `apply` 
 | `rescan` | a fresh scan raises a plan item the last plan did not show. Items the last plan showed and you left open are one note with their count. |
 | `fact-checks` | a config file the store cites for a fact no longer says that value. |
 | `compiled` | a compiled block was edited by hand, is missing, or is behind the store. A file compile leaves alone, and an edit you chose to keep, are notes. |
+| `loaded-size` | an agent file a listed repo holds, plus for `CLAUDE.md` each line that is only an `@` import of a file inside the scanned folder or the store (one level, sizes only), is over 8 KB. A file linked to another counts once. The key names the 8 KB band it is in, so accepting one size does not accept a bigger one. |
 | `views` | a view block was edited by hand, or a view file is missing or out of date with the store. |
 | `branches` | a `sync-agent-docs/apply-*` or `sync-agent-docs/compile-*` branch, in a listed repo or the store, is not merged into any branch of yours. |
 | `applies` | an apply in `.sync-agent-docs/applies.json` that was not rolled back stopped before committing in a repo, lost its branch before it was merged, or has a branch with commits apply did not make that is not merged. |
@@ -131,7 +132,7 @@ Before it contacts anything, doctor prints the full list to stderr. Doctor conta
   store: string;           // the truth store folder
   drift: boolean;          // true when any check has status 'drift'; the exit code is 1
   checks: {
-    id: 'rescan' | 'fact-checks' | 'compiled' | 'views' | 'branches' | 'applies' | 'secrets' | 'live';
+    id: 'rescan' | 'fact-checks' | 'compiled' | 'loaded-size' | 'views' | 'branches' | 'applies' | 'secrets' | 'live';
     status: 'clean' | 'drift' | 'disabled';
     findings: {
       key: string;         // stable id; put it in checks.json accepted to accept the finding

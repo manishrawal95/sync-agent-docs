@@ -1,6 +1,12 @@
 import { readlink, realpath, stat } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
+/** Codes for a path that holds no file, so nothing is loaded from it. */
+export const NOT_THERE: ReadonlySet<string> = new Set(['ENOENT', 'ENOTDIR', 'ELOOP']);
+
+/** The error's code, or its message when it has none. */
+export const codeOf = (err: unknown): string => (err as NodeJS.ErrnoException).code ?? (err as Error).message;
+
 /** Files under the scan root relative to it, files under home as `~/...`, anything else as is. */
 export function shortPath(path: string, root: string, home: string): string {
   if (path.startsWith(`${root}/`)) return relative(root, path);

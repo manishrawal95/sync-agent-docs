@@ -9,6 +9,7 @@ import { readJsonFile, readStore, writeJsonAtomic } from '../store/io.js';
 import type { ScanResult } from '../types.js';
 import { appliesCheck, branchesCheck } from './checks/branches.js';
 import { compiledCheck } from './checks/compiled.js';
+import { loadedSizeCheck } from './checks/loaded-size.js';
 import { factChecksCheck, rescanCheck } from './checks/rescan.js';
 import { secretsCheck } from './checks/secrets.js';
 import { viewsCheck } from './checks/views.js';
@@ -24,7 +25,7 @@ export interface DoctorOptions extends LiveOptions {
   crontabCommand?: string;
 }
 
-const CHECKS: Check[] = [rescanCheck, factChecksCheck, compiledCheck, viewsCheck, branchesCheck, appliesCheck, secretsCheck];
+const CHECKS: Check[] = [rescanCheck, factChecksCheck, compiledCheck, loadedSizeCheck, viewsCheck, branchesCheck, appliesCheck, secretsCheck];
 
 /**
  * Reruns every enabled check against the store and records the result in `.sync-agent-docs/doctor.json`.
@@ -44,6 +45,7 @@ export async function runDoctor(root: string, opts: DoctorOptions): Promise<Doct
     root, home: opts.home, now, storeDir, store,
     decisions: await readDecisions(root, storeDir),
     lastPlan: await readJsonFile<Plan>(join(dot, 'plan.json'), 'doctor'),
+    disabled: config.disabled,
     scan: () => (scan ??= collectScan(root, { home: opts.home, reposOnly: opts.reposOnly === true, now, crontabCommand: opts.crontabCommand })),
   };
   const live = opts.live ? liveCheck(opts) : null;

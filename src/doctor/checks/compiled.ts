@@ -1,9 +1,9 @@
 import { readFile } from 'node:fs/promises';
 import { readCompiledBlock, type CompiledBlock } from '../../compile/block.js';
 import { compiledDrift, compiledEditKey, isIgnoredOrUntracked } from '../../compile/compile.js';
-import { storePath } from '../../compile/deps.js';
-import { inside, isDir, resolveReal, shortPath } from '../../paths.js';
+import { shortPath } from '../../paths.js';
 import type { Check, DoctorContext, Found } from '../types.js';
+import { listedRepos } from './repos.js';
 
 const WHY = {
   edited: 'its compiled block was edited by hand. Run sync-agent-docs plan to discard or keep the edit.',
@@ -36,24 +36,9 @@ export const compiledCheck: Check = {
   async run(ctx) {
     const { store, home } = ctx;
     const show = (p: string) => shortPath(p, ctx.root, home);
-    const out: Found[] = [];
-    const storeReal = await resolveReal(ctx.storeDir, 'doctor');
-    const rootReal = await resolveReal(storePath(store.config.root, home, home), 'doctor');
-    for (const r of store.config.repos) {
-      const repo = storePath(r.path, store.config.root, home);
-      if (!(await isDir(repo, 'doctor'))) {
-        out.push({ key: `compiled:${show(repo)}:not-there`, level: 'note', message: `${show(repo)} is listed in sync-agent-docs.json but is not there, so it was not checked.`, path: show(repo) });
-        continue;
-      }
-      const repoReal = await resolveReal(repo, 'doctor');
-      if (repoReal === storeReal) {
-        out.push({ key: `compiled:${show(repo)}:store`, level: 'note', message: `${show(repo)} is the truth store, so it has no compiled blocks to check.`, path: show(repo) });
-        continue;
-      }
-      if (!inside(repoReal, rootReal)) {
-        out.push({ key: `compiled:${show(repo)}:outside-root`, message: `${show(repo)} is listed in sync-agent-docs.json but is outside root ${store.config.root}, so compile will refuse it. Move it under the root or take it out of repos.`, path: show(repo) });
-        continue;
-      }
+    const { repos, found } = await listedRepos(ctx);
+    const out: Found[] = [...found];
+    for (const { repo } of repos) {
       for (const d of await compiledDrift(repo, store, { storeDir: ctx.storeDir, home, isIgnoredOrUntracked })) {
         const path = show(d.file);
         if (d.kind === 'skipped') {
