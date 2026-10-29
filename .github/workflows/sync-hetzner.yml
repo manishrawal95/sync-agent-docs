@@ -32,6 +32,8 @@ jobs:
           chmod 600 ~/.ssh/deploy_sync_key
 
       - name: Sync devuser checkout
+        env:
+          SYNC_TARGET: ${{ secrets.SYNC_TARGET }}
         run: |
           ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
-            -i ~/.ssh/deploy_sync_key devuser@*** "sync-agent-docs"
+            -i ~/.ssh/deploy_sync_key "$SYNC_TARGET" "sync-agent-docs"
