@@ -6,6 +6,7 @@ import { copilot } from './copilot.js';
 import { cursor } from './cursor.js';
 import { gemini } from './gemini.js';
 
+/** Claude first: doctor's loaded-size check measures a linked pair under CLAUDE.md, with its imports. */
 export const COMPILERS: readonly AgentCompiler[] = [claude, agents, gemini, cursor, copilot];
 
 /** The files compile writes, relative to a repo root. */

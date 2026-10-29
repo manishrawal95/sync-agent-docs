@@ -2,7 +2,7 @@ import type { Plan } from '../plan/types.js';
 import type { Decision, Store } from '../store/types.js';
 import type { ScanResult } from '../types.js';
 
-export const CHECK_IDS = ['rescan', 'fact-checks', 'compiled', 'views', 'branches', 'applies', 'secrets', 'live'] as const;
+export const CHECK_IDS = ['rescan', 'fact-checks', 'compiled', 'loaded-size', 'views', 'branches', 'applies', 'secrets', 'live'] as const;
 export type CheckId = (typeof CHECK_IDS)[number];
 
 /** `drift` fails the run; `accepted` is drift the owner listed in checks.json; `note` never fails. */
@@ -21,6 +21,8 @@ export interface DoctorContext {
   scan(): Promise<ScanResult>;
   /** The last plan.json, or null when plan never ran here. */
   lastPlan: Plan | null;
+  /** Checks switched off in checks.json, for a check that reports what another would have. */
+  disabled: ReadonlySet<CheckId>;
 }
 
 /** A finding a check reports before checks.json decides its level. */

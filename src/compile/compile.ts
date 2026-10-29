@@ -1,14 +1,14 @@
-import { lstat, readFile, realpath } from 'node:fs/promises';
+import { lstat, readFile, realpath, stat } from 'node:fs/promises';
 import { dirname, join, relative } from 'node:path';
 import { isIgnored, isTracked, toplevelOf } from '../git.js';
-import { danglingLink, isDir, resolveReal, shortPath } from '../paths.js';
+import { codeOf, danglingLink, isDir, NOT_THERE, resolveReal, shortPath } from '../paths.js';
 import { decisionKey } from '../plan/decisions.js';
 import type { Store } from '../store/types.js';
 import type { AgentFormat } from '../types.js';
 import { viewFile } from '../views/render.js';
 import { type CompiledBlock, outsideCompiled, readCompiledBlock, writeCompiledBlock } from './block.js';
 import { repoDependencies, repoEntry } from './deps.js';
-import type { AgentCompiler } from './content.js';
+import { type AgentCompiler, importsCard } from './content.js';
 import { COMPILED_FILES, COMPILERS } from './formats/index.js';
 import { refusedLink } from './links.js';
 
@@ -111,12 +111,30 @@ async function inspect(repoPath: string, store: Store, ctx: CompileContext, text
       continue;
     }
     const outside = existing === null ? '' : outsideCompiled(existing);
-    const body = writer.body({ repoPath, store, entityIds, outside, card });
+    const body = writer.body({ repoPath, store, entityIds, outside, card, project: `project:${entry.name}`, shared: writer.format === 'claude' && importsCard(outside, card) && (await sharesFile(repoPath, g.path, writer.file)) });
     const next = writeCompiledBlock(existing, body, owner.newFilePrefix);
     const mode = existing === null ? null : (await lstat(g.path)).mode & 0o7777;
     found.push({ target: { format: owner.format, path: g.path, existing, next, mode, edited: block && block.recorded !== block.actual ? block : null } });
   }
   return { found, notes, skipped };
+}
+
+/** True when another agent file in the repo is the same file on disk (a link or a hard link), whether or not its format is enabled. */
+async function sharesFile(repoPath: string, own: string, ownFile: string): Promise<boolean> {
+  const { dev, ino } = await stat(own);
+  for (const f of COMPILED_FILES) {
+    if (f === ownFile) continue;
+    const path = join(repoPath, f);
+    try {
+      const other = await stat(path);
+      if (other.dev === dev && other.ino === ino) return true;
+    } catch (err) {
+      // A file that cannot be found cannot be this file.
+      if (NOT_THERE.has((err as NodeJS.ErrnoException).code ?? '')) continue;
+      throw new Error(`compile: could not check ${path} (${codeOf(err)}). Check its permissions.`, { cause: err });
+    }
+  }
+  return false;
 }
 
 async function anyPresent(compilers: AgentCompiler[], repoPath: string): Promise<boolean> {

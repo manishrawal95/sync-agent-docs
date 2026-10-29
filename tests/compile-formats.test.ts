@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { readCompiledBlock, writeCompiledBlock } from '../src/compile/block.js';
-import { factsBody } from '../src/compile/content.js';
+import { CARD_NOTE, factsBody, NO_FACTS } from '../src/compile/content.js';
 import { COMPILERS, compilerFor } from '../src/compile/formats/index.js';
 import type { Store } from '../src/store/types.js';
 import { MARKER } from '../src/views/render.js';
@@ -24,7 +24,7 @@ const store = (): Store => ({
   secrets: [], decisions: [],
 });
 const IDS = ['host:hetzner', 'project:shop'];
-const input = (outside = '') => ({ repoPath: '/r', store: store(), entityIds: IDS, outside, card: '@~/truth/projects/shop.md' });
+const input = (outside = '', shared = false) => ({ repoPath: '/r', store: store(), entityIds: IDS, outside, card: '@~/truth/projects/shop.md', project: 'project:shop', shared });
 
 describe('factsBody', () => {
   it('lists each entity with its facts and leaves notes to the views', () => {
@@ -77,11 +77,57 @@ describe('format compilers', () => {
     expect(claude.body(input('# Shop\n@~/truth/projects/shop.md\n'))).not.toContain('@~/truth');
   });
 
+  it('claude drops the project section when the card import sits outside the block', () => {
+    const body = compilerFor('claude').body(input('# Shop\n@~/truth/projects/shop.md\n'));
+    expect(body).not.toContain('### `shop` (project)');
+    expect(body).not.toContain('| port | `3300` |');
+    expect(body).toContain('### `hetzner` (host)');
+    expect(body).toContain(CARD_NOTE);
+    expect(body).not.toContain('@~/truth');
+  });
+
+  it('claude keeps the project section when the card line outside the block is inside a code fence', () => {
+    const body = compilerFor('claude').body(input('```\n@~/truth/projects/shop.md\n```\n'));
+    expect(body).toContain('### `shop` (project)');
+    expect(body).toContain('\n@~/truth/projects/shop.md\n');
+  });
+
+  it('claude finds a card path with a space on its own line outside the block, but not inside a fence', () => {
+    const spaced = { ...input('# Shop\n@~/my truth/projects/shop.md\n'), card: '@~/my truth/projects/shop.md' };
+    expect(compilerFor('claude').body(spaced)).toContain(CARD_NOTE);
+    const fenced = { ...spaced, outside: '```\n@~/my truth/projects/shop.md\n```\n' };
+    expect(compilerFor('claude').body(fenced)).toContain('### `shop` (project)');
+  });
+
+  it('claude keeps the project section when it adds the import itself', () => {
+    const body = compilerFor('claude').body(input());
+    expect(body).toContain('### `shop` (project)');
+    expect(body).not.toContain(CARD_NOTE);
+  });
+
+  it('claude keeps the project section when CLAUDE.md is also another agent file', () => {
+    const body = compilerFor('claude').body(input('# Shop\n@~/truth/projects/shop.md\n', true));
+    expect(body).toContain('### `shop` (project)');
+    expect(body).not.toContain(CARD_NOTE);
+  });
+
+  it('a trimmed claude block with no other entity names the card, not "no facts"', () => {
+    const body = compilerFor('claude').body({ ...input('@~/truth/projects/shop.md\n'), entityIds: ['project:shop'] });
+    expect(body).toContain(CARD_NOTE);
+    expect(body).not.toContain(NO_FACTS);
+  });
+
+  it('with no card, claude keeps the project section', () => {
+    expect(compilerFor('claude').body({ ...input('@~/truth/projects/shop.md\n'), card: null })).toContain('### `shop` (project)');
+  });
+
   it('agents, gemini and copilot carry the facts body with no import', () => {
     for (const f of ['agents', 'gemini', 'copilot'] as const) {
-      const body = compilerFor(f).body(input());
-      expect(body).toContain(factsBody(store(), IDS));
-      expect(body).not.toContain('@~/truth');
+      for (const outside of ['', '@~/truth/projects/shop.md\n']) {
+        const body = compilerFor(f).body(input(outside));
+        expect(body).toContain(factsBody(store(), IDS));
+        expect(body).not.toContain('@~/truth');
+      }
     }
   });
 

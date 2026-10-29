@@ -1,9 +1,11 @@
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, realpath, symlink, writeFile } from 'node:fs/promises';
+import { chmod, link, mkdir, mkdtemp, readFile, realpath, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { compiledDrift, compileTargets, isIgnoredOrUntracked } from '../src/compile/compile.js';
+import { writeCompiledBlock } from '../src/compile/block.js';
+import { CARD_NOTE, factsBody, HEADING, INTRO } from '../src/compile/content.js';
 import { detectCompiledEdits } from '../src/compile/edits.js';
 import { refusedLink } from '../src/compile/links.js';
 import type { Store } from '../src/store/types.js';
@@ -166,6 +168,67 @@ describe('compiledDrift', () => {
       { file: join(repo, 'GEMINI.md'), kind: 'missing' },
     ]);
     expect(await isIgnoredOrUntracked(join(repo, '.cursor', 'rules', 'sync-agent-docs.mdc'))).toBe(false);
+  });
+
+  it('a CLAUDE.md of its own with the card import outside the block gets no project section', async () => {
+    const { repo, store, ctx } = await setup({ 'CLAUDE.md': '# Shop\n\n@~/truth/projects/shop.md\n' });
+    const [t] = (await compileTargets(repo, store, ctx)).targets;
+    expect(t?.next).not.toContain('| port | `3300` |');
+    expect(t?.next).toContain(CARD_NOTE);
+  });
+
+  it('a link loop at an agent file whose format is off does not stop compile', async () => {
+    const { repo, store, ctx } = await setup({ 'CLAUDE.md': '# Shop\n\n@~/truth/projects/shop.md\n' });
+    store.config.agentFormats = ['claude', 'agents', 'cursor', 'copilot'];
+    await symlink('GEMINI.md', join(repo, 'GEMINI.md'));
+    const [t] = (await compileTargets(repo, store, ctx)).targets;
+    expect(t?.next).toContain(CARD_NOTE);
+    expect(t?.next).not.toContain('| port | `3300` |');
+  });
+
+  it('a CLAUDE.md linked to AGENTS.md keeps the project section even with the import outside', async () => {
+    const { repo, store, ctx } = await setup({ 'AGENTS.md': '# Agents\n\n@~/truth/projects/shop.md\n' });
+    await symlink('AGENTS.md', join(repo, 'CLAUDE.md'));
+    const [t] = (await compileTargets(repo, store, ctx)).targets;
+    expect(t?.path).toBe(join(repo, 'AGENTS.md'));
+    expect(t?.next).toContain('| port | `3300` |');
+  });
+
+  it('with only claude allowed, an AGENTS.md linked to CLAUDE.md still counts as shared', async () => {
+    const { repo, store, ctx } = await setup({ 'CLAUDE.md': '# Shop\n\n@~/truth/projects/shop.md\n' });
+    store.config.agentFormats = ['claude'];
+    await symlink('CLAUDE.md', join(repo, 'AGENTS.md'));
+    const [t] = (await compileTargets(repo, store, ctx)).targets;
+    expect(t?.next).toContain('| port | `3300` |');
+  });
+
+  it('a CLAUDE.md hard-linked to AGENTS.md keeps the project section even with the import outside', async () => {
+    const { repo, store, ctx } = await setup({ 'CLAUDE.md': '# Shop\n\n@~/truth/projects/shop.md\n' });
+    await link(join(repo, 'CLAUDE.md'), join(repo, 'AGENTS.md'));
+    const [t] = (await compileTargets(repo, store, ctx)).targets;
+    expect(t?.next).toContain('| port | `3300` |');
+  });
+
+  it('an agent file path compile cannot stat does not stop a CLAUDE.md that has no card import outside', async () => {
+    const { repo, store, ctx } = await setup({ 'CLAUDE.md': '# Shop\n' });
+    await mkdir(join(repo, '.cursor'));
+    store.config.agentFormats = ['claude'];
+    await chmod(join(repo, '.cursor'), 0o000);
+    try {
+      const [t] = (await compileTargets(repo, store, ctx)).targets;
+      expect(t?.next).toContain('| port | `3300` |');
+    } finally {
+      await chmod(join(repo, '.cursor'), 0o755);
+    }
+  });
+
+  it('a block written before the trim is stale once, and clean after compile rewrites it', async () => {
+    const { repo, store, ctx } = await setup({});
+    const old = [HEADING, INTRO, factsBody(store, ['project:shop'])].join('\n\n');
+    await writeFile(join(repo, 'CLAUDE.md'), writeCompiledBlock('# Shop\n\n@~/truth/projects/shop.md\n', old));
+    expect(await compiledDrift(repo, store, ctx)).toEqual([{ file: join(repo, 'CLAUDE.md'), kind: 'stale' }]);
+    await writeNext(repo, store, ctx);
+    expect(await compiledDrift(repo, store, ctx)).toEqual([]);
   });
 });
 
