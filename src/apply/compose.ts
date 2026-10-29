@@ -37,9 +37,10 @@ function answerFacts(i: PlanItem, short: Shorten): StoreFact[] | null {
 /**
  * The next store: the previous one, then folded view edits, then the plan's answers, each
  * replacing what the store held for the same entity and attribute. An attribute a folded edit
- * changed keeps the edit: it is newer than any answer remembered from an earlier plan. Pure; reads no file.
+ * changed keeps the edit: it is newer than any answer remembered from an earlier plan. `manualFiles` are the
+ * absolute paths whose edits only went to manual patches, so a secret there is not yet removed. Pure; reads no file.
  */
-export function composeStore(prev: Store | null, plan: Plan, decisions: Decision[], home: string, folded: FoldedBlock[] = []): Store {
+export function composeStore(prev: Store | null, plan: Plan, decisions: Decision[], home: string, folded: FoldedBlock[] = [], manualFiles: ReadonlySet<string> = new Set()): Store {
   const short: Shorten = (p) => shortPath(p, plan.root, home);
   let facts = [...(prev?.facts ?? [])];
   const replace = (entityId: string, attributes: (a: Attribute) => boolean, next: StoreFact[]): void => {
@@ -72,7 +73,8 @@ export function composeStore(prev: Store | null, plan: Plan, decisions: Decision
     }
     if (i.kind === 'secret') {
       const at = i.secretAt ?? { path: i.subject, line: i.edits['rotate-remove']?.[0]?.line ?? 0 };
-      const status = i.answer === 'false-positive' ? 'false-positive' : i.secretAt ? 'manual' : 'removed';
+      const patchedOnly = i.answer === 'rotate-remove' && (i.edits['rotate-remove'] ?? []).some((e) => manualFiles.has(e.path));
+      const status = i.answer === 'false-positive' ? 'false-positive' : i.secretAt || patchedOnly ? 'manual' : 'removed';
       const s: StoreSecret = { ...at, status };
       secrets.set(`${s.path}:${s.line}`, s);
     }

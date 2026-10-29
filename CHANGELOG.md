@@ -6,6 +6,24 @@
 - doctor's loaded-size finding names the imports it counted and rounds the size up, so a file just over budget never reads as 8.0 KB; it and compile no longer stop on a link loop or a non-file at an agent path.
 - `compile` no longer lists a repo's own project facts twice in CLAUDE.md: when the project card import already sits outside the block, the block leaves those facts to the card. Such CLAUDE.md blocks show as stale once; run `sync-agent-docs compile` to rewrite them.
 - New `doctor` check `loaded-size`: an agent file, with the files CLAUDE.md imports, is drift once an agent would load more than 8 KB of it every turn. Turn it off alone with `"disabled": ["loaded-size"]` in `checks.json`.
+- Changing an answer by hand in plan.json (a remembered, prompted or flag answer) now sticks through the next plan.
+- doctor --repos-only no longer reports facts from machine files as drift; it notes how many it did not recheck, even when the scanned folder is your home folder.
+- A view checked out with CRLF line endings is no longer reported as edited by hand.
+- doctor --live keeps each check within its 3 s, probes each origin or ip:port once, and reports a shared target for every entity that records it, honouring each one's network mark. Every live finding key now ends in its entity, so accept it again in checks.json if you had.
+- doctor no longer rewrites .sync-agent-docs/.gitignore on every run.
+- apply refuses to create a new store inside a git repo with uncommitted changes; inside a clean repo it says the store is nested there.
+- doctor stops with exit 2 naming a recorded repo git cannot open, instead of reporting its apply as lost. A recorded repo whose folder is no longer a git repo is drift, not an abort.
+- rollback checks that each repo's original branch still exists before changing anything.
+- Chains of identity answers are followed in full, whatever order they were saved in.
+- Marker lines inside an indented code example are no longer read as a managed block.
+- A remembered delete for a stale or duplicate line now applies only to that exact line. Answers saved before this are asked once more, and doctor reports each as new until you run plan.
+- A secret apply could only patch (file outside git) is now recorded as not removed and listed under "Not removed:", so doctor keeps flagging it.
+- Files ignored by a nested .gitignore, .git/info/exclude or your global excludes file are no longer read. If git itself cannot run, the scan stops and says so instead of reading them; a folder that is not a git repo uses its root .gitignore with no skipped note, and a scan checks at most 8 repos at a time.
+- A view or agent file saved with a byte order mark keeps its first-line block.
+- `ps -p 1234` and similar commands in docs are no longer read as ports.
+- Env names set inline in package.json scripts, runtime names such as NODE_ENV and PORT, and names a GitHub workflow reads as secrets.NAME are no longer reported stale.
+- A stray file such as .DS_Store in ~/.claude/projects no longer stops the scan.
+- Secrets written as `api_key: …` or inside a URL query followed by more parameters are now caught and kept out of scan.json.
 
 ## 2026-10-22
 

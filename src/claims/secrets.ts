@@ -19,6 +19,8 @@ const PATH_ONLY = /^\d{1,5}\/(?:[^/]*\/)*$/;
 const HOST = /^(?:localhost|[\w-]+(?:\.[\w-]+)+|\[[0-9a-f:]+\])$/i;
 const portPath = (user: string, rest: string): boolean => PATH_ONLY.test(rest) || (PORT_START.test(rest) && HOST.test(user));
 const ASSIGNMENT = /\b([A-Za-z_][A-Za-z0-9_]*)\s*=\s*["']?([^\s"'`]+)/g;
+// `api_key: value` in YAML. Prose and headings use colons freely, so it counts only for a secret name.
+const COLON_ASSIGNMENT = /\b([A-Za-z_][A-Za-z0-9_]*)\s*:\s*["']?([^\s"'`]+)/g;
 // IDs shaped like a commit SHA, a SHA-256 digest or a UUID, skipped only under a name that says
 // ID and not secret: an unknown name fails closed.
 const ID_SHAPE = /^(?:[0-9a-f]{40}|[0-9a-f]{64}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
@@ -70,6 +72,8 @@ function* urlCredentials(line: string): Generator<[string, string]> {
   }
 }
 
+const firstPart = (value: string): string => value.split(/[&;]/, 1)[0] ?? '';
+
 /** The secret on a line, or null. Only ever passed to `mask`. */
 function secretIn(line: string): string | null {
   for (const re of KNOWN) {
@@ -77,7 +81,11 @@ function secretIn(line: string): string | null {
     if (m) return m[0];
   }
   for (const [user, cred] of urlCredentials(line)) if (!PLACEHOLDER.test(cred) && !portPath(user, cred)) return cred;
-  for (const [, name = '', value] of line.matchAll(ASSIGNMENT)) {
+  const assignments = [...line.matchAll(ASSIGNMENT)];
+  for (const m of line.matchAll(COLON_ASSIGNMENT)) if (SECRET_NAME.test(m[1] ?? '') && looksLikeToken(firstPart(m[2] ?? ''))) assignments.push(m);
+  for (const [, name = '', rawValue = ''] of assignments) {
+    // `?token=X&env=prod` and `token=X;env=prod`: the value ends at the separator.
+    const value = firstPart(rawValue);
     if (!value) continue;
     const idName = ID_NAME.test(name) || CAMEL_ID.test(name);
     // A UUID is too regular to pass the entropy test, so a secret name is what flags it.

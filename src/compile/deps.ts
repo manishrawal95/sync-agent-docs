@@ -16,7 +16,7 @@ export function repoEntry(repoPath: string, store: Store, home: string): Store['
 
 /**
  * The entities a repo depends on, read from the store alone: its own project, every entity with a
- * fact sourced in the repo, and entities an approved identity answer ties to one of those.
+ * fact sourced in the repo, and entities approved identity answers tie to one of those, followed until nothing new is added.
  */
 export function repoDependencies(repoPath: string, store: Store, home: string): string[] {
   const { root } = store.config;
@@ -24,8 +24,13 @@ export function repoDependencies(repoPath: string, store: Store, home: string): 
   for (const f of store.facts) {
     if (f.sources.some((s) => storePath(s.path, root, home).startsWith(repoPath + sep))) deps.add(f.entityId);
   }
-  for (const d of store.decisions) {
-    if (d.kind === 'identity' && d.answer === 'same' && d.candidates.some((id) => deps.has(id))) d.candidates.forEach((id) => deps.add(id));
+  let grew = true;
+  while (grew) {
+    const before = deps.size;
+    for (const d of store.decisions) {
+      if (d.kind === 'identity' && d.answer === 'same' && d.candidates.some((id) => deps.has(id))) d.candidates.forEach((id) => deps.add(id));
+    }
+    grew = deps.size > before;
   }
   return [...deps].sort();
 }

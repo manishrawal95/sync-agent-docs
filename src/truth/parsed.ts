@@ -37,14 +37,54 @@ export function lineAt(text: string, offset: number): number {
   return line;
 }
 
-const PORT_FLAG = /(?:^|\s)(?:-p|--port)(?:\s+|=)(\d{1,5})\b|\bPORT=(\d{1,5})\b/g;
+/** The one port-flag pattern: `short` is set for `-p`, which command and doc parsing treat differently. */
+const PORT_FLAG = /(?:^|\s)(?:(?<short>-p)|--port)(?:\s+|=)(?<flag>\d{1,5})\b|\bPORT=(?<env>\d{1,5})\b/g;
 
 /** Ports a start command sets with -p N, --port N or PORT=N. */
 export function portsInCommand(command: string): string[] {
   const ports: string[] = [];
   for (const m of command.matchAll(PORT_FLAG)) {
-    const port = m[1] ?? m[2];
+    const port = m.groups?.flag ?? m.groups?.env;
     if (port && isPort(port)) ports.push(port);
+  }
+  return ports;
+}
+
+const DEV_SERVER_COMMANDS = new Set([
+  'next', 'vite', 'nuxt', 'astro', 'remix', 'serve', 'http-server', 'live-server', 'wrangler', 'vercel', 'netlify',
+  'uvicorn', 'gunicorn', 'flask', 'rails', 'hugo', 'jekyll', 'npm', 'pnpm', 'yarn', 'bun', 'node', 'deno', 'docker',
+]);
+const PACKAGE_RUNNERS = new Set(['npm', 'pnpm', 'yarn', 'bun']);
+const PACKAGE_SCRIPTS = new Set(['run', 'start', 'dev']);
+/** Tools whose `-p` names a process, a path or an ssh port; a dev command before one of them does not own its `-p`. */
+const OTHER_TOOLS = new Set(['ps', 'lsof', 'kill', 'pkill', 'pgrep', 'ssh', 'scp', 'mkdir', 'top']);
+/** How many words before `-p` may hold the dev command: `npm run dev -- -p` is the longest real shape. */
+const LOOKBACK = 4;
+
+/** True when the words just before a `-p` end in a dev server command and no other tool sits between. */
+function followsDevCommand(before: string): boolean {
+  const words = before.trim().split(/\s+/).filter(Boolean).slice(-LOOKBACK);
+  for (let i = words.length - 1; i >= 0; i--) {
+    const word = words[i] ?? '';
+    if (OTHER_TOOLS.has(word)) return false;
+    if (!DEV_SERVER_COMMANDS.has(word)) continue;
+    return !PACKAGE_RUNNERS.has(word) || PACKAGE_SCRIPTS.has(words[i + 1] ?? '');
+  }
+  return false;
+}
+
+/**
+ * Ports a line of prose or a doc code block sets. `--port N` and `PORT=N` count anywhere; `-p N` counts only when a
+ * dev server command (next, vite, `npm run dev`...) comes just before it in its segment (split on backticks, `|`,
+ * `&&`, `;`), since `ps -p 1234` names a process.
+ */
+export function portsInDocLine(line: string): string[] {
+  const ports: string[] = [];
+  for (const segment of line.split(/`|\||&&|;/)) {
+    for (const m of segment.matchAll(PORT_FLAG)) {
+      const port = m.groups?.flag ?? m.groups?.env;
+      if (port && isPort(port) && (!m.groups?.short || followsDevCommand(segment.slice(0, m.index)))) ports.push(port);
+    }
   }
   return ports;
 }

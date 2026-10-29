@@ -1,4 +1,4 @@
-import { readFile, rm, writeFile } from 'node:fs/promises';
+import { lstat, readFile, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { renderDoctor } from '../src/doctor/run.js';
@@ -104,5 +104,40 @@ describe('doctor: compiled blocks and views', () => {
     const { root, home, doctor } = await applied({ answerAll: true });
     await expect(doctor({ store: join(home, 'elsewhere') })).rejects.toThrow(/doctor: .*elsewhere.*sync-agent-docs apply/);
     expect(root).toBeTruthy();
+  });
+
+  it('doctor leaves an existing .sync-agent-docs/.gitignore alone', async () => {
+    const { root, doctor } = await applied({ answerAll: true });
+    const file = join(root, '.sync-agent-docs', '.gitignore');
+    const old = new Date('2001-01-01T00:00:00Z');
+    await utimes(file, old, old);
+    await doctor();
+    expect((await lstat(file)).mtime).toEqual(old);
+    expect(await readFile(file, 'utf8')).toBe('*\n');
+  });
+
+  it('a .gitignore with other content is rewritten to *', async () => {
+    const { root, doctor } = await applied({ answerAll: true });
+    const file = join(root, '.sync-agent-docs', '.gitignore');
+    await writeFile(file, 'foo\n');
+    await doctor();
+    expect(await readFile(file, 'utf8')).toBe('*\n');
+  });
+
+  it('a .gitignore that is a symlink is replaced, never written through', async () => {
+    const { root, doctor } = await applied({ answerAll: true });
+    const file = join(root, '.sync-agent-docs', '.gitignore');
+    const target = join(root, '..', `gitignore-target-${process.pid}`);
+    await writeFile(target, 'x');
+    try {
+      await rm(file);
+      await symlink(target, file);
+      await doctor();
+      expect((await lstat(file)).isFile()).toBe(true);
+      expect(await readFile(file, 'utf8')).toBe('*\n');
+      expect(await readFile(target, 'utf8')).toBe('x');
+    } finally {
+      await rm(target, { force: true });
+    }
   });
 });

@@ -1,4 +1,6 @@
-import { chmod, mkdir, readFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { chmod, mkdir, mkdtemp, readFile, realpath, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { computeFindings, entityName, tokensOf } from '../src/compare/findings.js';
@@ -8,6 +10,19 @@ import type { Fact, Finding } from '../src/types.js';
 import { materializeFixture } from './helpers/fixture.js';
 
 const NO_CRONTAB = 'sync-agent-docs-test-no-crontab';
+
+/** Stale env names for a one-repo scan; `.env` makes the repo env-checkable. */
+async function staleEnvNames(files: Record<string, string>): Promise<string[]> {
+  const home = await realpath(await mkdtemp(join(tmpdir(), 'sync-agent-docs-env-')));
+  const repo = join(home, 'dev', 'app');
+  execFileSync('git', ['init', '-q', '-b', 'main', repo]);
+  for (const [rel, text] of Object.entries(files)) {
+    await mkdir(join(repo, rel, '..'), { recursive: true });
+    await writeFile(join(repo, rel), text);
+  }
+  const result = await collectScan(join(home, 'dev'), { home, reposOnly: false, crontabCommand: NO_CRONTAB });
+  return result.findings.filter((f) => f.type === 'stale' && f.attribute === 'env').flatMap((f) => f.values?.map((v) => v.value) ?? []);
+}
 
 async function scanFixture() {
   const fx = await materializeFixture('messy-dev');
@@ -100,6 +115,38 @@ describe('computeFindings', () => {
     const repos = [{ name: 'a', path: '/r/a' }, { name: 'b', path: '/r/b' }];
     const { findings } = await computeFindings({ facts, corpus: new Set(), secrets: [], agentLines: [], home: '/h', root: '/r', repos });
     expect(findings.map((f) => f.values?.[0]?.value)).toEqual(['BAR_KEY']);
+  });
+
+  it('a name assigned inline in a package.json script is not stale', async () => {
+    const stale = await staleEnvNames({
+      '.env': 'DB_URL=x\n',
+      'package.json': '{"name":"app","scripts":{"dev":"NEXT_TELEMETRY_DISABLED=1 next dev"}}',
+      'README.md': '# app\n\nSet NEXT_TELEMETRY_DISABLED=1 to opt out.\n',
+    });
+    expect(stale).toEqual([]);
+  });
+
+  it('runtime names are never stale', async () => {
+    const names = ['NODE_ENV', 'PORT', 'CI', 'PATH', 'HOME', 'PWD', 'SHELL', 'USER', 'TZ'];
+    const stale = await staleEnvNames({ '.env': 'DB_URL=x\n', 'README.md': '# app\n\n' + names.map((n) => `${n}=1`).join('\n') + '\n' });
+    expect(stale).toEqual([]);
+  });
+
+  it('a name a workflow reads as secrets.NAME is not stale', async () => {
+    const stale = await staleEnvNames({
+      '.env': 'DB_URL=x\n',
+      '.github/workflows/deploy.yml': 'jobs:\n  d:\n    steps:\n      - with:\n          token: ${{ secrets.DEPLOY_HOOK }}\n',
+      'README.md': '# app\n\nSet DEPLOY_HOOK=1 in CI.\n',
+    });
+    expect(stale).toEqual([]);
+  });
+
+  it('a workflow file alone does not make a repo env-checkable', async () => {
+    const stale = await staleEnvNames({
+      '.github/workflows/deploy.yml': 'token: ${{ secrets.DEPLOY_HOOK }}\n',
+      'README.md': '# app\n\nSet OTHER_NAME=1 and DEPLOY_HOOK=1.\n',
+    });
+    expect(stale).toEqual([]);
   });
 
   it('score never drops below 0', () => {

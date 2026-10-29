@@ -49,6 +49,14 @@ describe('scan: secrets stay out and false findings stay out', () => {
     expect(await readFile(join(root, '.sync-agent-docs', 'scan.json'), 'utf8')).not.toContain(body);
   });
 
+  it('a YAML api_key line never reaches scan.json', async () => {
+    const tok = 'tf' + 'Q2x9Lm4Rt7Vb1Nc8Zk3Hy6Wd';
+    const { root, home } = await makeDev({ shop: { 'README.md': `# shop\n\napi_key: ${tok}\n` } });
+    const result = await runScan(root, { home, reposOnly: true, crontabCommand: NO_CRONTAB });
+    expect(JSON.stringify(result)).not.toContain(tok.slice(4));
+    expect(await readFile(join(root, '.sync-agent-docs', 'scan.json'), 'utf8')).not.toContain(tok.slice(4));
+  });
+
   it('a URL with a port and an @ later in its path is not a credential', () => {
     const src = { ...doc, path: '/dev/shop/README.md' };
     expect(findSecrets(src, 'Vite serves the client at http://localhost:5173/@vite/client\n')).toEqual([]);

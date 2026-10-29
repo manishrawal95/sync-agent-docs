@@ -1,7 +1,8 @@
-import { realpath } from 'node:fs/promises';
+import { lstat, realpath } from 'node:fs/promises';
+import { join } from 'node:path';
 import { readApplies, MANAGED_BRANCH } from '../../apply/branches.js';
 import { storePath } from '../../compile/deps.js';
-import { branchTip, git, hasCommit, isAncestor, toplevelOf } from '../../git.js';
+import { branchTip, git, GitError, hasCommit, isAncestor, toplevelOf } from '../../git.js';
 import { isDir, shortPath } from '../../paths.js';
 import type { Check, DoctorContext, Found } from '../types.js';
 
@@ -9,6 +10,25 @@ import type { Check, DoctorContext, Found } from '../types.js';
 async function merged(repo: string, commit: string): Promise<boolean> {
   const out = await git(repo, ['for-each-ref', '--contains', commit, '--format=%(refname:short)', 'refs/heads/'], 'doctor');
   return out.split('\n').some((b) => b !== '' && !b.startsWith('sync-agent-docs/'));
+}
+
+/**
+ * Whether `repo` is a git repo of its own, asked once per run. Only git's "not a git repository" with no
+ * .git left in the folder is an answer; a .git git cannot open, or any other failure, throws git's own error.
+ */
+async function isOwnRepo(repo: string): Promise<boolean> {
+  try {
+    return (await realpath((await git(repo, ['rev-parse', '--show-toplevel'], 'doctor')).trim())) === (await realpath(repo));
+  } catch (err) {
+    const stderr = ((err as Error).cause as { stderr?: string } | undefined)?.stderr ?? '';
+    if (!(err instanceof GitError) || !/not a git repository/i.test(stderr)) throw err;
+    const dotGit = await lstat(join(repo, '.git')).then(() => true, (e: NodeJS.ErrnoException) => {
+      if (e.code === 'ENOENT') return false;
+      throw err;
+    });
+    if (dotGit) throw err;
+    return false;
+  }
 }
 
 /** Every listed repo that is on disk and is a git repo of its own, then the store, each once. */
@@ -44,6 +64,7 @@ export const appliesCheck: Check = {
   id: 'applies',
   async run(ctx) {
     const out: Found[] = [];
+    const own = new Map<string, Promise<boolean>>();
     for (const entry of (await readApplies(ctx.root, 'doctor')).applies) {
       if (entry.rolledBack) continue;
       for (const r of entry.repos) {
@@ -55,6 +76,11 @@ export const appliesCheck: Check = {
         }
         if (r.commit === null) {
           out.push({ key: `${key}:no-commit`, path: shown, message: `apply ${entry.id} stopped before committing in ${shown}. Run sync-agent-docs rollback, then sync-agent-docs apply again.` });
+          continue;
+        }
+        if (!own.has(r.path)) own.set(r.path, isOwnRepo(r.path));
+        if (!(await own.get(r.path))) {
+          out.push({ key: `${key}:not-a-repo`, path: shown, message: `${shown} from apply ${entry.id} is no longer a git repository, so its commit was not checked. Re-clone it, or run sync-agent-docs rollback or remove that apply entry from .sync-agent-docs/applies.json.` });
           continue;
         }
         const head = await branchTip(r.path, r.branch);

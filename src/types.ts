@@ -5,7 +5,7 @@ export const AGENT_FORMATS: readonly AgentFormat[] = ['claude', 'agents', 'gemin
 export type SourceFormat =
   | 'markdown' | 'package-json' | 'wrangler' | 'vercel-json' | 'vercel-project'
   | 'pm2' | 'compose' | 'fly' | 'procfile' | 'env' | 'git-config'
-  | 'ssh-config' | 'crontab' | 'launch-agent' | 'shell-rc' | 'gh-hosts';
+  | 'ssh-config' | 'crontab' | 'launch-agent' | 'shell-rc' | 'gh-hosts' | 'github-workflow';
 export interface SourceFile {
   path: string; realPath: string; repo: string | null;
   kind: SourceKind; scope: Scope; format: SourceFormat; agent: AgentFormat | null;

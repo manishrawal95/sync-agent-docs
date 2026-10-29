@@ -47,6 +47,16 @@ describe('rollback', () => {
     expect(git(join(root, 'ops'), 'branch', '--list', BRANCH)).not.toBe('');
   });
 
+  it('a renamed original branch refuses before anything is rolled back', async () => {
+    const { root, entry } = await applied();
+    const shop = join(root, 'shop');
+    git(shop, 'branch', '-m', 'main', 'trunk');
+    await expect(runRollback(root)).rejects.toThrow(new RegExp(`${shop}.*main.*nothing was rolled back`));
+    for (const r of entry.repos) expect(git(r.path, 'branch', '--list', BRANCH)).not.toBe('');
+    const applies = JSON.parse(await readFile(join(root, '.sync-agent-docs', 'applies.json'), 'utf8')) as Applies;
+    expect(applies.applies[0]?.rolledBack).toBeUndefined();
+  });
+
   it('nothing to roll back says so', async () => {
     const fx = await materializeFixture('messy-dev', { commit: true });
     await expect(runRollback(fx.root)).rejects.toThrow(/nothing to roll back/i);

@@ -21,6 +21,8 @@ export interface FindingsResult { findings: Finding[]; agentTokens: number; dupl
 
 const COMPARED: Attribute[] = ['port', 'ip'];
 const STALE_CHECKED: Attribute[] = ['ip', 'path', 'env'];
+/** Set by the shell or the platform, never listed in a repo's own config. */
+const RUNTIME_ENV_NAMES: ReadonlySet<string> = new Set(['NODE_ENV', 'PORT', 'CI', 'PATH', 'HOME', 'PWD', 'SHELL', 'USER', 'TZ']);
 const ORDER: FindingType[] = ['conflict', 'global-local', 'possible-conflict', 'stale', 'duplicated', 'secret'];
 
 export const tokensOf = (text: string): number => Math.ceil(text.length / 4);
@@ -128,7 +130,7 @@ export async function computeFindings(input: FindingsInput): Promise<FindingsRes
   // An env name set in Vercel or on a server is invisible here, so only a repo that lists its env names locally can prove one stale.
   const envRepos = new Set(input.facts.filter((f) => f.kind === 'truth' && f.attribute === 'env').map((f) => repoOf(f.at.path, repos)?.path));
   const checkable = (f: Fact): boolean => {
-    if (f.attribute === 'env') return f.scope === 'repo' && envRepos.has(repoOf(f.at.path, repos)?.path ?? '\0');
+    if (f.attribute === 'env') return !RUNTIME_ENV_NAMES.has(f.value) && f.scope === 'repo' && envRepos.has(repoOf(f.at.path, repos)?.path ?? '\0');
     if (f.attribute === 'path') return f.value.startsWith('~/') || under(f.value, home) || under(f.value, input.root);
     return true;
   };

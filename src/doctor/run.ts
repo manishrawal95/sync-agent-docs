@@ -42,7 +42,7 @@ export async function runDoctor(root: string, opts: DoctorOptions): Promise<Doct
   const config = await readChecksConfig(dot);
   let scan: Promise<ScanResult> | null = null;
   const ctx: DoctorContext = {
-    root, home: opts.home, now, storeDir, store,
+    root, home: opts.home, now, reposOnly: opts.reposOnly === true, storeDir, store,
     decisions: await readDecisions(root, storeDir),
     lastPlan: await readJsonFile<Plan>(join(dot, 'plan.json'), 'doctor'),
     disabled: config.disabled,

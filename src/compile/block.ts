@@ -11,10 +11,6 @@ const hashLine = (hash: string): string => `<!-- sync-agent-docs:hash ${hash} --
 /** `recorded` is the hash compile wrote (null when its line is gone); `actual` is the body's hash now. */
 export interface CompiledBlock { body: string; recorded: string | null; actual: string }
 
-export function bodyHash(body: string): string {
-  return blockHash(body.replaceAll('\r', ''));
-}
-
 /** The compiled block in `text`, or null when there is none. Broken markers throw, naming the block. */
 export function readCompiledBlock(text: string): CompiledBlock | null {
   const raw = readBlocks(text)[COMPILED_ID];
@@ -22,7 +18,7 @@ export function readCompiledBlock(text: string): CompiledBlock | null {
   const lines = raw.replaceAll('\r', '').split('\n');
   const m = HASH.exec(lines[0]?.trim() ?? '');
   const body = (m ? lines.slice(1) : lines).join('\n');
-  return { body, recorded: m?.[1] ?? null, actual: bodyHash(body) };
+  return { body, recorded: m?.[1] ?? null, actual: blockHash(body) };
 }
 
 /**
@@ -31,7 +27,7 @@ export function readCompiledBlock(text: string): CompiledBlock | null {
  */
 export function writeCompiledBlock(text: string | null, body: string, prefix = ''): string {
   const cr = text?.includes('\r\n') ? '\r' : '';
-  const block = [beginMarker(COMPILED_ID), hashLine(bodyHash(body)), ...body.split('\n'), endMarker(COMPILED_ID)];
+  const block = [beginMarker(COMPILED_ID), hashLine(blockHash(body)), ...body.split('\n'), endMarker(COMPILED_ID)];
   // A blank file is as good as none: it gets the prefix, such as a Cursor rule's frontmatter.
   if (text === null || text.trim() === '') return `${prefix}${block.join('\n')}\n`;
   if (readCompiledBlock(text) === null) {

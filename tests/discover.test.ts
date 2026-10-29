@@ -35,6 +35,64 @@ describe('discover', () => {
     expect(paths).toContain(join(shop.path, '.env'));
   });
 
+  it('files ignored by a nested .gitignore or info/exclude are not read', async () => {
+    const { root } = await materializeFixture('messy-dev');
+    const shop = join(root, 'shop');
+    await mkdir(join(shop, 'docs'), { recursive: true });
+    await writeFile(join(shop, 'docs', '.gitignore'), 'private.md\n.env\n');
+    await writeFile(join(shop, 'docs', 'private.md'), 'port 1234\n');
+    await writeFile(join(shop, 'docs', 'public.md'), 'port 1234\n');
+    await writeFile(join(shop, 'docs', '.env'), 'NAME=x\n');
+    await writeFile(join(shop, 'local.md'), 'port 1234\n');
+    await writeFile(join(shop, '.git', 'info', 'exclude'), 'local.md\n');
+    const paths = (await classifySources({ name: 'shop', path: shop })).map((s) => s.path);
+    expect(paths).not.toContain(join(shop, 'docs', 'private.md'));
+    expect(paths).not.toContain(join(shop, 'local.md'));
+    expect(paths).toContain(join(shop, 'docs', 'public.md'));
+    expect(paths).toContain(join(shop, 'docs', '.env'));
+  });
+
+  it('an excluded .vercel/project.json and .env are still read, an excluded note is not', async () => {
+    const { root } = await materializeFixture('messy-dev');
+    const shop = join(root, 'shop');
+    await mkdir(join(shop, '.vercel'), { recursive: true });
+    await writeFile(join(shop, '.vercel', 'project.json'), '{"projectId":"prj_example","orgId":"team_example"}\n');
+    await writeFile(join(shop, '.env'), 'NAME=x\n');
+    await writeFile(join(shop, 'notes.md'), 'port 1234\n');
+    await writeFile(join(shop, '.git', 'info', 'exclude'), '.vercel/\n.env\nnotes.md\n');
+    const sources = await classifySources({ name: 'shop', path: shop });
+    expect(sources).toContainEqual(expect.objectContaining({ path: join(shop, '.vercel', 'project.json'), format: 'vercel-project' }));
+    expect(sources).toContainEqual(expect.objectContaining({ path: join(shop, '.env'), format: 'env' }));
+    expect(sources.map((s) => s.path)).not.toContain(join(shop, 'notes.md'));
+  });
+
+  it('a folder that is not a git repo keeps root .gitignore rules without a skipped note', async () => {
+    const { root } = await materializeFixture('messy-dev');
+    const plain = join(root, 'plain');
+    await mkdir(plain);
+    await writeFile(join(plain, '.gitignore'), 'tmp.md\n');
+    await writeFile(join(plain, 'tmp.md'), 'x\n');
+    await writeFile(join(plain, 'kept.md'), 'x\n');
+    const skipped: SkippedFile[] = [];
+    const paths = (await classifySources({ name: 'plain', path: plain }, skipped)).map((s) => s.path);
+    expect(paths).toEqual([join(plain, 'kept.md')]);
+    expect(skipped).toEqual([]);
+  });
+
+  it('git failing to run stops the scan instead of reading files its ignore rules would drop', async () => {
+    const { root } = await materializeFixture('messy-dev');
+    const plain = join(root, 'plain');
+    await mkdir(plain);
+    await writeFile(join(plain, 'kept.md'), 'x\n');
+    const path = process.env.PATH;
+    process.env.PATH = '';
+    try {
+      await expect(classifySources({ name: 'plain', path: plain }, [])).rejects.toThrow(/git is not installed.*run again/);
+    } finally {
+      process.env.PATH = path;
+    }
+  });
+
   it('skips test fixture folders at any depth and a top-level test folder', async () => {
     const { root, home } = await materializeFixture('messy-dev');
     const blog = join(root, 'blog');
@@ -141,6 +199,18 @@ describe('discover', () => {
     expect(byName('/.env')).toMatchObject({ kind: 'truth', format: 'env' });
     const blog = await classifySources({ name: 'blog', path: join(root, 'blog') });
     expect(blog.find((s) => s.path.endsWith('.vercel/project.json'))).toMatchObject({ kind: 'truth', format: 'vercel-project' });
+  });
+
+  it('workflow yml files are read as github-workflow truth', async () => {
+    const { root } = await materializeFixture('messy-dev');
+    const shop = join(root, 'shop');
+    await mkdir(join(shop, '.github', 'workflows'), { recursive: true });
+    await writeFile(join(shop, '.github', 'workflows', 'ci.yml'), 'name: ci\n');
+    await writeFile(join(shop, '.github', 'workflows', 'ci.yaml'), 'name: ci\n');
+    const sources = await classifySources({ name: 'shop', path: shop });
+    for (const file of ['ci.yml', 'ci.yaml']) {
+      expect(sources.find((s) => s.path.endsWith(`.github/workflows/${file}`))).toMatchObject({ kind: 'truth', format: 'github-workflow' });
+    }
   });
 
   it('skips a 600 KB file, a binary file and an invalid UTF-8 file with reasons', async () => {

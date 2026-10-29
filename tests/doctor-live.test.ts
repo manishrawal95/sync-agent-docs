@@ -3,6 +3,7 @@ import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
 import { createServer as createTcpServer, type AddressInfo, type Socket } from 'node:net';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { liveTargets } from '../src/doctor/live.js';
 import { CHECK_IDS, type LiveTarget } from '../src/doctor/types.js';
 import type { StoreEntity, StoreFact } from '../src/store/types.js';
 import { applied, check } from './helpers/doctor.js';
@@ -30,8 +31,8 @@ async function http(status: number | 'hang', headers: Record<string, string> = {
   return { seen, port: (server.address() as AddressInfo).port };
 }
 
-async function tcp() {
-  const server = createTcpServer((s) => s.destroy());
+async function tcp(counter?: { connections: number }) {
+  const server = createTcpServer((s) => ((counter ? counter.connections++ : 0), s.destroy()));
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
   closers.push(closing(server));
   return (server.address() as AddressInfo).port;
@@ -116,7 +117,7 @@ describe('doctor --live', () => {
     const r = await doctor({ live: true, timeoutMs: 200 });
     const c = check(r, 'live');
     expect(c.status).toBe('drift');
-    expect(c.findings.map((f) => f.key)).toEqual([`live:http:http://127.0.0.1:${hung.port}/`, `live:tcp:127.0.0.1:${closed}`]);
+    expect(c.findings.map((f) => f.key)).toEqual([`live:http:http://127.0.0.1:${hung.port}/:host:lab`, `live:tcp:127.0.0.1:${closed}:host:lab`]);
     expect(r.live?.map((t) => t.detail)).toEqual([expect.stringContaining('timed out'), expect.stringContaining('refused')]);
   });
 
@@ -174,4 +175,60 @@ describe('doctor --live', () => {
     const { doctor } = await setup([entity('host:lab', 'lan')], []);
     await expect(doctor()).rejects.toThrow(/doctor: .*entities\.json: host:lab has network "lan", which is not local or tailnet/);
   });
+
+  it('a target shared by two entities is listed for each', () => {
+    const facts = ['a', 'b'].flatMap((id) => [fact(id, 'ip', '192.0.2.5'), fact(id, 'port', '22'), fact(id, 'url', 'https://example.com/api/x')]);
+    const { planned } = liveTargets({ entities: [entity('a'), entity('b')], facts } as never);
+    expect(planned).toHaveLength(4);
+    for (const target of ['192.0.2.5:22', 'https://example.com/api/x']) {
+      expect(planned.filter((p) => p.shown.target === target).map((p) => p.shown.entityId)).toEqual(['a', 'b']);
+    }
+  });
+
+  it('one HEAD per origin and one connect per ip:port, shared by every target', async () => {
+    const web = await http(200);
+    const conns = { connections: 0 };
+    const port = await tcp(conns);
+    const origin = `http://127.0.0.1:${web.port}`;
+    const { doctor } = await setup([entity('a', 'local'), entity('b', 'local'), entity('c', 'local'), entity('d', 'local')], [
+      fact('a', 'url', `${origin}/api/x`), fact('a', 'url', `${origin}/api/y`), fact('b', 'url', `${origin}/`),
+      fact('c', 'ip', '127.0.0.1'), fact('c', 'port', String(port)), fact('d', 'ip', '127.0.0.1'), fact('d', 'port', String(port)),
+    ]);
+    const r = await doctor({ live: true });
+    expect(web.seen).toHaveLength(1);
+    expect(conns.connections).toBe(1);
+    expect(r.live).toHaveLength(5);
+    expect(r.live?.every((t) => t.result === 'ok')).toBe(true);
+  });
+
+  it('a shared private address is skipped for the unmarked entity and contacted for the marked one', async () => {
+    const conns = { connections: 0 };
+    const port = await tcp(conns);
+    const { doctor } = await setup([entity('a'), entity('b', 'local')], [fact('a', 'ip', '127.0.0.1'), fact('a', 'port', String(port)), fact('b', 'ip', '127.0.0.1'), fact('b', 'port', String(port))]);
+    const r = await doctor({ live: true });
+    expect(r.live?.map((t) => [t.entityId, t.result])).toEqual([['a', 'skipped'], ['b', 'ok']]);
+    expect(conns.connections).toBe(1);
+    expect(check(r, 'live').findings.map((f) => f.key)).toEqual([`live:tcp:127.0.0.1:${port}:a`]);
+  });
+
+  it('each unmarked entity sharing a private address is told to mark itself', async () => {
+    const { doctor } = await setup([entity('a'), entity('c')], ['a', 'c'].flatMap((id) => [fact(id, 'ip', '192.0.2.5'), fact(id, 'port', '22')]));
+    const r = await doctor({ live: true });
+    const findings = check(r, 'live').findings;
+    expect(findings.map((f) => f.key)).toEqual(['live:tcp:192.0.2.5:22:a', 'live:tcp:192.0.2.5:22:c']);
+    for (const id of ['a', 'c']) {
+      const f = findings.find((x) => x.key.endsWith(`:${id}`));
+      expect(f?.message).toContain(`to ${id} in store/entities.json`);
+    }
+    expect(r.live?.map((t) => t.detail?.includes(`to ${t.entityId} in`))).toEqual([true, true]);
+  });
+
+  it('one deadline covers lookup and connect', async () => {
+    const hung = await http('hang');
+    const { doctor } = await setup([entity('host:lab', 'local')], [fact('host:lab', 'url', `http://slow.example.com:${hung.port}/`)]);
+    const started = Date.now();
+    const r = await doctor({ live: true, timeoutMs: 600, resolve: async () => (await new Promise((done) => setTimeout(done, 500)), [{ address: '127.0.0.1', family: 4 }]) });
+    expect(Date.now() - started).toBeLessThan(900);
+    expect(r.live?.[0]).toMatchObject({ result: 'failed', detail: expect.stringContaining('timed out') });
+  }, 10_000);
 });

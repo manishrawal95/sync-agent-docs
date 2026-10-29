@@ -3,6 +3,7 @@ import http from 'node:http';
 import https from 'node:https';
 import { BlockList, connect, isIP, type LookupFunction } from 'node:net';
 import { join } from 'node:path';
+import { mapLimited } from '../pool.js';
 import { printable } from '../report/terminal.js';
 import type { Store } from '../store/types.js';
 import type { Check, Found, LiveTarget } from './types.js';
@@ -12,7 +13,8 @@ export const LIVE_CONCURRENCY = 4;
 const NETWORKS = ['local', 'tailnet'];
 
 /** A target with what probing it needs; only `shown` is ever printed. */
-interface Planned { shown: LiveTarget; host: string; port: number; scheme?: 'http' | 'https' }
+interface Planned { shown: LiveTarget; host: string; port: number; scheme?: 'http' | 'https'; probeKey: string }
+type Resolved = { address: string; family: number }[];
 
 /** IANA special-purpose IPv4 ranges (RFC 6890 and later): never contacted for an unmarked entity. */
 const SPECIAL_V4 = new BlockList();
@@ -90,7 +92,8 @@ function planUrl(value: string, entityId: string): Planned | LiveTarget {
   const target = `${u.protocol}//${u.host}${u.pathname}`;
   if (scheme !== 'http' && scheme !== 'https') return { kind: 'http', target, entityId, result: 'skipped', detail: 'only http and https URLs are checked' };
   const port = Number(u.port || (scheme === 'https' ? 443 : 80));
-  return { shown: { kind: 'http', target, entityId }, host: u.hostname.replace(/^\[|\]$/g, ''), port, scheme };
+  const host = u.hostname.replace(/^\[|\]$/g, '');
+  return { shown: { kind: 'http', target, entityId }, host, port, scheme, probeKey: `http: ${scheme}://${host}:${port}` };
 }
 
 /** Every target the store records: url and domain facts as HEAD requests, each ip with each port as a TCP connect. */
@@ -100,7 +103,7 @@ export function liveTargets(store: Store): { planned: Planned[]; skipped: LiveTa
   const seen = new Set<string>();
   const add = (p: Planned | LiveTarget) => {
     const shown = 'shown' in p ? p.shown : p;
-    const id = `${shown.kind} ${shown.target}`;
+    const id = `${shown.kind} ${shown.target} ${shown.entityId}`;
     if (seen.has(id)) return;
     seen.add(id);
     if ('shown' in p) planned.push(p);
@@ -113,7 +116,7 @@ export function liveTargets(store: Store): { planned: Planned[]; skipped: LiveTa
     const ports = values('port').map(Number).filter((p) => Number.isInteger(p) && p > 0 && p < 65536);
     for (const ip of [...values('ip'), ...(e.identifiers.ip ? [e.identifiers.ip] : [])]) {
       if (!isIP(ip)) continue;
-      for (const port of ports) add({ shown: { kind: 'tcp', target: `${isIP(ip) === 6 ? `[${ip}]` : ip}:${port}`, entityId: e.id }, host: ip, port });
+      for (const port of ports) add({ shown: { kind: 'tcp', target: `${isIP(ip) === 6 ? `[${ip}]` : ip}:${port}`, entityId: e.id }, host: ip, port, probeKey: `tcp: ${ip}:${port}` });
     }
   }
   return { planned, skipped };
@@ -129,19 +132,22 @@ function reason(err: NodeJS.ErrnoException): string {
   return err.code ? `${err.code}: ${err.message}` : err.message;
 }
 
+/** Thrown by `resolveOnce` when the deadline passes first, so callers need not read the message. */
+class LookupTimeout extends Error {}
+
 /** Every address `host` resolves to, looked up once: the caller checks them all and connects to the first. */
-async function resolveOnce(host: string, timeoutMs: number): Promise<{ address: string; family: number }[]> {
+async function resolveOnce(host: string, timeoutMs: number, resolve: (host: string) => Promise<Resolved>): Promise<Resolved> {
   if (isIP(host)) return [{ address: host, family: isIP(host) }];
   let timer: NodeJS.Timeout | undefined;
-  const late = new Promise<never>((_, reject) => (timer = setTimeout(() => reject(new Error(`resolving ${host} timed out after ${timeoutMs} ms`)), timeoutMs)));
+  const late = new Promise<never>((_, reject) => (timer = setTimeout(() => reject(new LookupTimeout(`resolving ${host} timed out after ${timeoutMs} ms`)), timeoutMs)));
   try {
-    return await Promise.race([lookup(host, { all: true, order: 'verbatim' }), late]);
+    return await Promise.race([resolve(host), late]);
   } finally {
     clearTimeout(timer);
   }
 }
 
-function headRequest(t: Planned, address: string, family: number, timeoutMs: number): Promise<Outcome> {
+function headRequest(t: Planned, address: string, family: number, left: number, timeoutMs: number): Promise<Outcome> {
   const pinned: LookupFunction = (_host, options, cb) => (options.all ? cb(null, [{ address, family }]) : cb(null, address, family));
   return new Promise((done) => {
     let settled = false;
@@ -151,7 +157,7 @@ function headRequest(t: Planned, address: string, family: number, timeoutMs: num
       clearTimeout(deadline);
       done(o);
     };
-    const req = (t.scheme === 'https' ? https : http).request({ host: t.host, port: t.port, path: '/', method: 'HEAD', headers: { 'user-agent': 'sync-agent-docs-doctor' }, agent: false, lookup: pinned, timeout: timeoutMs }, (res) => {
+    const req = (t.scheme === 'https' ? https : http).request({ host: t.host, port: t.port, path: '/', method: 'HEAD', headers: { 'user-agent': 'sync-agent-docs-doctor' }, agent: false, lookup: pinned, timeout: left }, (res) => {
       const status = res.statusCode ?? 0;
       res.destroy();
       if (status >= 500) finish(failed(`answered ${status}`));
@@ -161,15 +167,15 @@ function headRequest(t: Planned, address: string, family: number, timeoutMs: num
     req.on('timeout', () => req.destroy(new Error(`timed out after ${timeoutMs} ms`)));
     req.on('error', (err) => finish(failed(reason(err))));
     // `timeout` above only fires when the socket goes idle; a server that keeps trickling bytes needs a hard stop.
-    const deadline = setTimeout(() => req.destroy(new Error(`timed out after ${timeoutMs} ms`)), timeoutMs);
+    const deadline = setTimeout(() => req.destroy(new Error(`timed out after ${timeoutMs} ms`)), left);
     req.end();
   });
 }
 
-function tcpConnect(address: string, port: number, timeoutMs: number): Promise<Outcome> {
+function tcpConnect(address: string, port: number, left: number, timeoutMs: number): Promise<Outcome> {
   return new Promise((done) => {
-    const socket = connect({ host: address, port, timeout: timeoutMs });
-    const deadline = setTimeout(() => socket.destroy(new Error(`timed out after ${timeoutMs} ms`)), timeoutMs);
+    const socket = connect({ host: address, port, timeout: left });
+    const deadline = setTimeout(() => socket.destroy(new Error(`timed out after ${timeoutMs} ms`)), left);
     const finish = (o: Outcome) => (clearTimeout(deadline), done(o));
     socket.once('connect', () => (socket.destroy(), finish(ok('accepted a connection'))));
     socket.once('timeout', () => socket.destroy(new Error(`timed out after ${timeoutMs} ms`)));
@@ -177,21 +183,26 @@ function tcpConnect(address: string, port: number, timeoutMs: number): Promise<O
   });
 }
 
-async function probe(t: Planned, local: boolean, timeoutMs: number): Promise<Outcome> {
+/** One probe of a target, with `deadline` (epoch ms) covering the lookup and the connect together. */
+async function probe(t: Planned, local: boolean, deadline: number, timeoutMs: number, resolve: (host: string) => Promise<Resolved>): Promise<Outcome> {
+  const left = () => deadline - Date.now();
+  const timedOut = () => failed(`timed out after ${timeoutMs} ms`);
+  if (left() <= 0) return timedOut();
   let addresses;
   try {
-    addresses = await resolveOnce(t.host, timeoutMs);
+    addresses = await resolveOnce(t.host, left(), resolve);
   } catch (err) {
-    return failed(reason(err as NodeJS.ErrnoException));
+    return err instanceof LookupTimeout ? timedOut() : failed(reason(err as NodeJS.ErrnoException));
   }
   const bad = local ? null : notGlobal(addresses);
   if (bad !== null) {
     const via = t.host === bad ? '' : ` resolves to ${bad}, which`;
-    return { result: 'skipped', detail: `${t.host}${via} is not a public address, so it was not contacted. To check it, add "network": "local" (or "tailnet") to ${t.shown.entityId} in store/entities.json` };
+    return { result: 'skipped', detail: `${t.host}${via} is not a public address, so it was not contacted` };
   }
   const resolved = addresses[0];
   if (!resolved) return failed('the name does not resolve');
-  return t.shown.kind === 'tcp' ? tcpConnect(resolved.address, t.port, timeoutMs) : headRequest(t, resolved.address, resolved.family, timeoutMs);
+  if (left() <= 0) return timedOut();
+  return t.shown.kind === 'tcp' ? tcpConnect(resolved.address, t.port, left(), timeoutMs) : headRequest(t, resolved.address, resolved.family, left(), timeoutMs);
 }
 
 /** The list printed before any lookup or connection, so the owner sees what --live will touch. */
@@ -201,7 +212,7 @@ export function renderLiveTargets(targets: LiveTarget[]): string {
   return [`doctor --live: checking ${targets.length} targets from the store (private addresses are skipped unless the entity is marked local or tailnet):`, ...lines].join('\n');
 }
 
-export interface LiveOptions { timeoutMs?: number; onLiveTargets?: (targets: LiveTarget[]) => void }
+export interface LiveOptions { timeoutMs?: number; resolve?: (host: string) => Promise<Resolved>; onLiveTargets?: (targets: LiveTarget[]) => void }
 
 /**
  * The live check. `onLiveTargets` gets the full list before any lookup or connection; the probed
@@ -216,19 +227,25 @@ export function liveCheck(opts: LiveOptions): Check & { results: LiveTarget[] } 
       const { planned, skipped } = liveTargets(ctx.store);
       opts.onLiveTargets?.([...planned.map((p) => ({ ...p.shown })), ...skipped]);
       const local = new Set(ctx.store.entities.filter((e) => e.network).map((e) => e.id));
-      const outcomes: Outcome[] = new Array(planned.length);
-      let next = 0;
-      const worker = async () => {
-        for (let i = next++; i < planned.length; i = next++) {
-          const p = planned[i];
-          if (p) outcomes[i] = await probe(p, local.has(p.shown.entityId), opts.timeoutMs ?? LIVE_TIMEOUT_MS);
-        }
-      };
-      await Promise.all(Array.from({ length: Math.min(LIVE_CONCURRENCY, planned.length) }, worker));
-      results.push(...planned.map((p, i) => ({ ...p.shown, ...outcomes[i] })), ...skipped);
+      const timeoutMs = opts.timeoutMs ?? LIVE_TIMEOUT_MS;
+      const resolve = opts.resolve ?? ((host: string) => lookup(host, { all: true, order: 'verbatim' }));
+      // One probe per origin or ip:port and contact mode; every planned target in the group gets its outcome.
+      const groups = new Map<string, { first: Planned; local: boolean; outcome?: Outcome }>();
+      const groupOf = planned.map((p) => {
+        const isLocal = local.has(p.shown.entityId);
+        const key = `${p.probeKey}|${isLocal}`;
+        if (!groups.has(key)) groups.set(key, { first: p, local: isLocal });
+        return key;
+      });
+      await mapLimited([...groups.values()], LIVE_CONCURRENCY, async (g) => {
+        g.outcome = await probe(g.first, g.local, Date.now() + timeoutMs, timeoutMs, resolve);
+      });
+      // The outcome is shared by the group; the advice to mark an entity names each target's own.
+      const withAdvice = (t: LiveTarget): LiveTarget => (t.result === 'skipped' ? { ...t, detail: `${t.detail}. To check it, add "network": "local" (or "tailnet") to ${t.entityId} in store/entities.json` } : t);
+      results.push(...planned.map((p, i) => withAdvice({ ...p.shown, ...groups.get(groupOf[i] ?? '')?.outcome })), ...skipped);
       const out: Found[] = [];
       for (const t of results) {
-        const key = `live:${t.kind}:${t.target}`;
+        const key = `live:${t.kind}:${t.target}:${t.entityId}`;
         if (t.result === 'failed') out.push({ key, message: `${t.target} (${t.entityId}): ${t.detail ?? 'failed'}. Check that it is up, or fix the store if it moved.` });
         else if (t.result === 'skipped') out.push({ key, level: 'note', message: `${t.target} (${t.entityId}): ${t.detail ?? 'skipped'}.` });
       }

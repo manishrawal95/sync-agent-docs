@@ -38,4 +38,14 @@ describe('repoDependencies', () => {
     expect(repoDependencies('/home/u/dev/shop', store(facts, [decision('same')]), HOME)).toEqual(['app:hetzner', 'host:hetzner', 'project:shop']);
     expect(repoDependencies('/home/u/dev/shop', store(facts, [decision('different')]), HOME)).toEqual(['host:hetzner', 'project:shop']);
   });
+
+  it('follows an identity chain whatever order the decisions are stored in', () => {
+    const decision = (key: string, candidates: string[]): Store['decisions'][number] => ({ key, kind: 'identity', subject: key, candidates, answer: 'same', decidedAt: '2026-10-22T00:00:00Z' });
+    const dA = decision('identity|a', ['project:shop', 'host:b']);
+    const dB = decision('identity|b', ['host:b', 'host:c']);
+    const facts = [fact('project:shop', 'shop/package.json')];
+    for (const order of [[dA, dB], [dB, dA]]) {
+      expect(repoDependencies('/home/u/dev/shop', store(facts, order), HOME)).toEqual(['host:b', 'host:c', 'project:shop']);
+    }
+  });
 });

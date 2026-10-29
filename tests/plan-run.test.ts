@@ -57,6 +57,31 @@ describe('runPlan', () => {
     expect(second.items.find((i) => i.tier === 'conflict')?.answeredBy).toBe('remembered');
   });
 
+  it('a prompt or flag answer edited by hand in plan.json survives the next plan', async () => {
+    const { root, opts } = await setup();
+    const planPath = join(root, '.sync-agent-docs', 'plan.json');
+    const first = await runPlan(root, { ...opts, asker: scripted(), acceptAuto: true });
+    const edited = JSON.parse(await readFile(planPath, 'utf8')) as Plan;
+    const swapped = new Map<string, string>();
+    for (const by of ['prompt', 'flag'] as const) {
+      const item = edited.items.find((i) => i.answeredBy === by && i.options.length > 1 && i.options.some((o) => o !== i.answer));
+      expect(item, `an item answered by ${by} with a second option`).toBeDefined();
+      if (!item) continue;
+      const other = item.options.find((o) => o !== item.answer);
+      if (!other) continue;
+      swapped.set(item.key, other);
+      item.answer = other;
+    }
+    await writeFile(planPath, JSON.stringify(edited));
+    const second = await runPlan(root, { ...opts, asker: refusing });
+    expect(first.items.length).toBeGreaterThan(0);
+    for (const [key, answer] of swapped) {
+      const item = second.items.find((i) => i.key === key);
+      expect(item?.answer).toBe(answer);
+      expect(item?.answeredBy).toBe('hand');
+    }
+  });
+
   it('--accept-auto answers only the auto tier', async () => {
     const { root, opts } = await setup();
     const plan = await runPlan(root, { ...opts, acceptAuto: true });
