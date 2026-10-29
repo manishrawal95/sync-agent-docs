@@ -46,13 +46,13 @@ async function agentFile(text: string): Promise<{ p: string; bytes: number }> {
 
 describe('loadedSize errors', () => {
   it('stops with the doctor message when the file cannot be read', async () => {
-    await expect(loadedSize(join(repo, 'CLAUDE.md'), join(repo, 'gone.md'), opts)).rejects.toThrow(/^doctor: could not read .*\(ENOENT\)\. Check its permissions\./);
+    await expect(loadedSize(join(repo, 'CLAUDE.md'), join(repo, 'gone.md'), opts)).rejects.toThrow(/^doctor: could not read .*\(ENOENT\)\. Check the path and try again\./);
   });
 
   it('stops with the doctor message when an import fails for a code that is not skipped', async () => {
     const { p } = await agentFile('@docs/notes.md\n');
     vi.mocked(fsp.realpath).mockRejectedValueOnce(Object.assign(new Error('i/o'), { code: 'EIO' }));
-    await expect(loadedSize(p, p, opts)).rejects.toThrow(/^doctor: could not check .* imported by .*\(EIO\)\. Check its permissions\./);
+    await expect(loadedSize(p, p, opts)).rejects.toThrow(/^doctor: could not check .* imported by .*\(EIO\)\. Check the path and try again\./);
   });
 });
 
@@ -70,6 +70,11 @@ describe('loadedSize', () => {
     expect(r.imports).toEqual([card, join(repo, 'docs', 'notes.md')].sort());
   });
 
+  it('counts no import for a path with a space, which Claude Code cannot load', async () => {
+    const { p } = await agentFile('@~/my truth/projects/shop.md\n@docs/notes.md\n');
+    expect((await loadedSize(p, p, opts)).imports).toEqual([join(repo, 'docs', 'notes.md')]);
+  });
+
   it('follows one level only, and ignores inline and fenced @ lines', async () => {
     const { p } = await agentFile('see @docs/deep.md\n```\n@docs/deep.md\n```\n~~~\n@docs/deep.md\n~~~\n@docs/notes.md\n');
     expect((await loadedSize(p, p, opts)).imports).toEqual([join(repo, 'docs', 'notes.md')]);
@@ -83,6 +88,16 @@ describe('loadedSize', () => {
 
   it('a fenced block in a nested list item is still a fence, so its @ line is not counted', async () => {
     const { p } = await agentFile('- step\n    ```\n    @docs/deep.md\n    ```\n   ```\n@docs/deep.md\n    ```\n@docs/notes.md\n');
+    expect((await loadedSize(p, p, opts)).imports).toEqual([join(repo, 'docs', 'notes.md')]);
+  });
+
+  it('a fence opened after a list marker hides its @ line, and a top-level fence is unchanged', async () => {
+    const { p } = await agentFile('- ```\n  @docs/deep.md\n  ```\n1. ~~~\n   @docs/deep.md\n   ~~~\n```\n@docs/deep.md\n```\n@docs/notes.md\n');
+    expect((await loadedSize(p, p, opts)).imports).toEqual([join(repo, 'docs', 'notes.md')]);
+  });
+
+  it('a list marker inside an open fence does not end it', async () => {
+    const { p } = await agentFile('```\n- ```\n@docs/deep.md\n```\n@docs/notes.md\n');
     expect((await loadedSize(p, p, opts)).imports).toEqual([join(repo, 'docs', 'notes.md')]);
   });
 

@@ -4,6 +4,7 @@ import { lineHasSecret } from '../claims/secrets.js';
 import type { Store } from '../store/types.js';
 import type { AgentFormat } from '../types.js';
 import { byFact, code, factsTable } from '../views/render.js';
+import { ABSENT, codeOf, nextStep } from '../paths.js';
 
 export const HEADING = '## Facts from the truth store';
 export const INTRO = 'Compiled by sync-agent-docs from the truth store. Do not edit inside these markers: change the store and run sync-agent-docs compile.';
@@ -43,13 +44,16 @@ export function factsBody(store: Store, entityIds: string[]): string {
   return sections.join('\n\n') || NO_FACTS;
 }
 
+/** One list marker and the space after it; a fence may open right after it (`- ```). */
+const LIST_MARKER = /^(?:[-*+]|\d+\.) /;
+
 /** The trimmed lines of `text` outside code fences. A fence closes only on its own character, at least as long as the opener, with nothing after it (CommonMark). */
 export function unfencedLines(text: string): string[] {
   const lines: string[] = [];
   let opener: { char: string; length: number } | null = null;
   for (const raw of text.split(/\r?\n/)) {
     const line = raw.trim();
-    const run = /^(`{3,}|~{3,})(.*)$/.exec(line);
+    const run = /^(`{3,}|~{3,})(.*)$/.exec(opener ? line : line.replace(LIST_MARKER, ''));
     const char = run?.[1]?.[0] ?? '';
     const length = run?.[1]?.length ?? 0;
     if (opener) {
@@ -63,9 +67,12 @@ export function unfencedLines(text: string): string[] {
   return lines;
 }
 
+/** A whole line that is one `@path` import: Claude Code ends the path at whitespace, so a path with a space is not one. */
+export const IMPORT_LINE = /^@(\S+)$/;
+
 /** The `@path` lines of a CLAUDE.md that Claude Code loads: whole-line imports outside code fences. */
 export function importLines(text: string): string[] {
-  return unfencedLines(text).flatMap((line) => /^@(\S+)$/.exec(line)?.[1] ?? []);
+  return unfencedLines(text).flatMap((line) => IMPORT_LINE.exec(line)?.[1] ?? []);
 }
 
 /** Whether `outside` already imports the project `card` (an `@path`) on a line of its own, outside any code fence. */
@@ -78,8 +85,8 @@ export async function exists(path: string): Promise<boolean> {
     await stat(path);
     return true;
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
-    throw new Error(`compile: could not check ${path} (${(err as NodeJS.ErrnoException).code ?? (err as Error).message}). Check its permissions.`, { cause: err });
+    if (ABSENT.has(codeOf(err))) return false;
+    throw new Error(`compile: could not check ${path} (${codeOf(err)}). ${nextStep(err)}`, { cause: err });
   }
 }
 

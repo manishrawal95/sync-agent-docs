@@ -1,7 +1,19 @@
 import type { Parsed, ParsedFact } from '../parsed.js';
+import { lineHasSecret, looksLikeToken } from '../../claims/secrets.js';
 import { streamLines } from '../stream.js';
 
 const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const UPPER_SNAKE = /^[A-Z][A-Z0-9]*(_[A-Z0-9]+)*$/;
+
+/** Whether `text`, from `from`, holds a closing `quote`: one after an even run of backslashes, since dotenv reads `\'`, `\"` and an escaped backtick as part of the value. */
+function closesQuote(text: string, quote: string, from: number): boolean {
+  for (let i = text.indexOf(quote, from); i >= 0; i = text.indexOf(quote, i + 1)) {
+    let slashes = 0;
+    while (text[i - 1 - slashes] === '\\') slashes++;
+    if (slashes % 2 === 0) return true;
+  }
+  return false;
+}
 
 /**
  * Variable names from a .env file (or, with exportOnly, `export NAME=` lines of a shell rc).
@@ -13,7 +25,7 @@ export async function parseEnvNames(path: string, exportOnly = false): Promise<P
   let openKey = false; // an unquoted key body (`KEY=-----BEGIN ... PRIVATE KEY-----` then bare lines): same
   await streamLines(path, (raw, line) => {
     if (openQuote) {
-      if (raw.includes(openQuote)) openQuote = null;
+      if (closesQuote(raw, openQuote, 0)) openQuote = null;
       return;
     }
     if (openKey) {
@@ -27,9 +39,11 @@ export async function parseEnvNames(path: string, exportOnly = false): Promise<P
     const name = left.replace(/^export\s+/, '');
     const value = raw.slice(eq + 1).trim();
     const quote = value[0] === '"' || value[0] === "'" || value[0] === '`' ? value[0] : null;
-    if (quote && value.indexOf(quote, 1) < 0) openQuote = quote;
+    if (quote && !closesQuote(value, quote, 1)) openQuote = quote;
     else if (!quote && /^-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(value) && !/-----END [A-Z ]*PRIVATE KEY-----/.test(value)) openKey = true;
-    if (NAME.test(name)) facts.push({ attribute: 'env', value: name, line });
+    // Backstop for a value the quote rules misjudge: a token-shaped name is a secret's body line, never a variable, unless it is upper snake with an underscore (real env names are; a body has lowercase or no underscore).
+    const secretBody = (looksLikeToken(name) && !(UPPER_SNAKE.test(name) && name.includes('_'))) || lineHasSecret(`${name}=x`);
+    if (NAME.test(name) && !secretBody) facts.push({ attribute: 'env', value: name, line });
   });
   return { facts, corpus: facts.map((f) => f.value) };
 }

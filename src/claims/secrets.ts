@@ -44,7 +44,7 @@ function entropy(value: string): number {
  * A high-entropy assigned value. Paths, URLs and anything with characters a token
  * does not use are left alone: precision over recall.
  */
-function looksLikeToken(value: string): boolean {
+export function looksLikeToken(value: string): boolean {
   return value.length >= 20
     && /^[A-Za-z0-9+/_\-.=]+$/.test(value) && !/^[/~.]/.test(value)
     && /\d/.test(value) && /[A-Za-z]/.test(value)

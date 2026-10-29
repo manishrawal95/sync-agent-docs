@@ -11,6 +11,8 @@ import type { Check, Found, LiveTarget } from './types.js';
 export const LIVE_TIMEOUT_MS = 3000;
 export const LIVE_CONCURRENCY = 4;
 const NETWORKS = ['local', 'tailnet'];
+/** Node's TLS error codes for a certificate that could not be verified; `detail` holds the code. */
+const CERT_CODE = /^(CERT_|UNABLE_TO_|DEPTH_ZERO_|SELF_SIGNED_|ERR_TLS_CERT_)/;
 
 /** A target with what probing it needs; only `shown` is ever printed. */
 interface Planned { shown: LiveTarget; host: string; port: number; scheme?: 'http' | 'https'; probeKey: string }
@@ -165,7 +167,7 @@ function headRequest(t: Planned, address: string, family: number, left: number, 
       else finish(ok(`answered ${status}`));
     });
     req.on('timeout', () => req.destroy(new Error(`timed out after ${timeoutMs} ms`)));
-    req.on('error', (err) => finish(failed(reason(err))));
+    req.on('error', (err: NodeJS.ErrnoException) => finish(err.code && CERT_CODE.test(err.code) ? { result: 'cert', detail: err.code } : failed(reason(err))));
     // `timeout` above only fires when the socket goes idle; a server that keeps trickling bytes needs a hard stop.
     const deadline = setTimeout(() => req.destroy(new Error(`timed out after ${timeoutMs} ms`)), left);
     req.end();
@@ -248,6 +250,8 @@ export function liveCheck(opts: LiveOptions): Check & { results: LiveTarget[] } 
         const key = `live:${t.kind}:${t.target}:${t.entityId}`;
         if (t.result === 'failed') out.push({ key, message: `${t.target} (${t.entityId}): ${t.detail ?? 'failed'}. Check that it is up, or fix the store if it moved.` });
         else if (t.result === 'skipped') out.push({ key, level: 'note', message: `${t.target} (${t.entityId}): ${t.detail ?? 'skipped'}.` });
+        else if (t.result === 'cert' && local.has(t.entityId)) out.push({ key, level: 'note', message: `${t.target} (${t.entityId}): answered, but its certificate could not be verified (${t.detail}).` });
+        else if (t.result === 'cert') out.push({ key, message: `${t.target} (${t.entityId}): its certificate is not valid (${t.detail}); renew it or fix the store if it moved.` });
       }
       return out;
     },

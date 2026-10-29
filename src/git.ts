@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { realpath, stat } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { promisify } from 'node:util';
+import { codeOf, nextStep } from './paths.js';
 
 const exec = promisify(execFile);
 
@@ -97,7 +98,7 @@ async function failure(cwd: string, err: unknown): Promise<string> {
       await stat(cwd);
     } catch (statErr) {
       if ((statErr as NodeJS.ErrnoException).code === 'ENOENT') return `${cwd} does not exist`;
-      throw new GitError(`could not check ${cwd} (${(statErr as NodeJS.ErrnoException).code ?? (statErr as Error).message}). Check its permissions.`, { cause: statErr });
+      throw new GitError(`could not check ${cwd} (${codeOf(statErr)}). ${nextStep(statErr)}`, { cause: statErr });
     }
     return 'git is not installed or not on PATH';
   }

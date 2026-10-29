@@ -1,14 +1,14 @@
 import { lstat, readFile, realpath, stat } from 'node:fs/promises';
 import { dirname, join, relative } from 'node:path';
 import { isIgnored, isTracked, toplevelOf } from '../git.js';
-import { codeOf, danglingLink, isDir, linkLoop, NOT_THERE, resolveReal, shortPath } from '../paths.js';
+import { ABSENT, codeOf, danglingLink, isDir, linkLoop, nextStep, NOT_THERE, resolveReal, shortPath } from '../paths.js';
 import { decisionKey } from '../plan/decisions.js';
 import type { Store } from '../store/types.js';
 import type { AgentFormat } from '../types.js';
 import { viewFile } from '../views/render.js';
 import { type CompiledBlock, editReason, outsideCompiled, readCompiledBlock, writeCompiledBlock } from './block.js';
 import { repoDependencies, repoEntry } from './deps.js';
-import { type AgentCompiler, importsCard } from './content.js';
+import { type AgentCompiler, IMPORT_LINE, importsCard } from './content.js';
 import { COMPILED_FILES, COMPILERS } from './formats/index.js';
 import { refusedLink } from './links.js';
 
@@ -38,16 +38,24 @@ async function readExisting(path: string): Promise<string | null> {
   try {
     await lstat(path);
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    throw new Error(`compile: could not check ${path} (${(err as NodeJS.ErrnoException).code ?? (err as Error).message}). Check its permissions.`, { cause: err });
+    if (ABSENT.has(codeOf(err))) return null;
+    throw new Error(`compile: could not check ${path} (${codeOf(err)}). ${nextStep(err)}`, { cause: err });
   }
-  return readFile(path, 'utf8');
+  try {
+    return await readFile(path, 'utf8');
+  } catch (err) {
+    throw new Error(`compile: could not read ${path} (${codeOf(err)}). ${nextStep(err)}`, { cause: err });
+  }
 }
 
-/** The project card import for a CLAUDE.md, or null when the store has no card for this repo. */
-function cardImport(store: Store, repoName: string, ctx: CompileContext): string | null {
+/** The project card import for a CLAUDE.md, or null when the store has no card for this repo or its path has whitespace (`notes` then says why). */
+function cardImport(store: Store, repoName: string, ctx: CompileContext, notes: string[]): string | null {
   const project = store.entities.find((e) => e.id === `project:${repoName}`);
-  return project ? `@${shortPath(ctx.storeDir, '\0', ctx.home)}/${viewFile(store.config.views, project)}` : null;
+  if (!project) return null;
+  const card = `@${shortPath(ctx.storeDir, '\0', ctx.home)}/${viewFile(store.config.views, project)}`;
+  if (IMPORT_LINE.test(card)) return card;
+  notes.push(`${repoName} got no card import: the card path ${card.slice(1)} has whitespace, and Claude Code imports cannot hold whitespace. Move the store to a path without spaces, then run sync-agent-docs compile again.`);
+  return null;
 }
 
 /** The agent files that are one file on disk, so compile writes that file once and never replaces a link. */
@@ -57,10 +65,10 @@ async function inspect(repoPath: string, store: Store, ctx: CompileContext, text
   const repoReal = await realpath(repoPath);
   const entry = repoEntry(repoPath, store, ctx.home);
   const entityIds = repoDependencies(repoPath, store, ctx.home);
-  const card = cardImport(store, entry.name, ctx);
   const wanted = entry.formats ?? [];
   const found: Inspected[] = [];
   const notes: string[] = [];
+  const card = cardImport(store, entry.name, ctx, notes);
   const skipped: { file: string; reason: string }[] = [];
   const groups = new Map<string, Group>();
   for (const c of COMPILERS) {
@@ -141,7 +149,7 @@ async function sharesFile(repoPath: string, own: string, ownFile: string): Promi
     } catch (err) {
       // A file that cannot be found cannot be this file.
       if (NOT_THERE.has((err as NodeJS.ErrnoException).code ?? '')) continue;
-      throw new Error(`compile: could not check ${path} (${codeOf(err)}). Check its permissions.`, { cause: err });
+      throw new Error(`compile: could not check ${path} (${codeOf(err)}). ${nextStep(err)}`, { cause: err });
     }
   }
   return false;
@@ -206,7 +214,7 @@ export async function isIgnoredOrUntracked(file: string): Promise<boolean> {
     () => true,
     (err: NodeJS.ErrnoException) => {
       if (err.code === 'ENOENT') return false;
-      throw new Error(`compile: could not check ${file} (${err.code ?? err.message}). Check its permissions.`, { cause: err });
+      throw new Error(`compile: could not check ${file} (${codeOf(err)}). ${nextStep(err)}`, { cause: err });
     },
   );
   return (await gitSkip(repo, relative(repo, await resolveReal(file, 'compile')), exists)) !== null;

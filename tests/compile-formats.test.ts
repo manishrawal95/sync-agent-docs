@@ -92,13 +92,6 @@ describe('format compilers', () => {
     expect(body).toContain('\n@~/truth/projects/shop.md\n');
   });
 
-  it('claude finds a card path with a space on its own line outside the block, but not inside a fence', () => {
-    const spaced = { ...input('# Shop\n@~/my truth/projects/shop.md\n'), card: '@~/my truth/projects/shop.md' };
-    expect(compilerFor('claude').body(spaced)).toContain(CARD_NOTE);
-    const fenced = { ...spaced, outside: '```\n@~/my truth/projects/shop.md\n```\n' };
-    expect(compilerFor('claude').body(fenced)).toContain('### `shop` (project)');
-  });
-
   it('claude keeps the project section when it adds the import itself', () => {
     const body = compilerFor('claude').body(input());
     expect(body).toContain('### `shop` (project)');

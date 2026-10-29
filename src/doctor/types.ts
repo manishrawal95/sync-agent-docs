@@ -10,7 +10,7 @@ export interface DoctorFinding { key: string; level: 'drift' | 'accepted' | 'not
 export interface CheckResult { id: CheckId; status: 'clean' | 'drift' | 'disabled'; findings: DoctorFinding[] }
 
 /** A network target from the store; `target` never carries credentials, a query or a fragment. */
-export interface LiveTarget { kind: 'http' | 'tcp'; target: string; entityId: string; result?: 'ok' | 'failed' | 'skipped'; detail?: string }
+export interface LiveTarget { kind: 'http' | 'tcp'; target: string; entityId: string; result?: 'ok' | 'failed' | 'skipped' | 'cert'; detail?: string }
 
 export interface DoctorResult { schema: 1; at: string; root: string; store: string; drift: boolean; checks: CheckResult[]; live: LiveTarget[] | null }
 

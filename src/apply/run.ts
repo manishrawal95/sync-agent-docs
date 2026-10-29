@@ -1,12 +1,12 @@
 import { createHash } from 'node:crypto';
-import { lstat, mkdir, readFile, realpath } from 'node:fs/promises';
+import { lstat, mkdir, readFile, realpath, stat } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { refusedLink } from '../compile/links.js';
 import { openDotDir, openSubDir, refuseTrackedDotDir, writeFresh } from '../dotdir.js';
 import { withLock } from '../lock.js';
 import { commitAll, git, GitError, isDirty, isIgnored, isTracked, toplevelOf } from '../git.js';
 import { machineClaimPaths } from '../discover/machine.js';
-import { checkStorePath, inside, isDir, linkLoop, resolveReal, shortPath } from '../paths.js';
+import { ABSENT, checkStorePath, codeOf, danglingLink, inside, isDir, linkLoop, nextStep, resolveReal, shortPath } from '../paths.js';
 import { readDecisions } from '../plan/decisions.js';
 import { toDecision } from '../plan/prompt.js';
 import { swapValue } from '../plan/lines.js';
@@ -81,11 +81,20 @@ function chosenEdits(plan: Plan, show: (p: string) => string): { byPath: Map<str
   return { byPath, itemsByPath };
 }
 
-/** The deepest folder at or above `path` that exists, where a store not yet made would land. */
-async function nearestExisting(path: string): Promise<string> {
-  let dir = path;
-  while (!(await exists(dir))) dir = dirname(dir);
-  return dir;
+/** The deepest folder at or above `path` that exists, where a store not yet made would land. A dangling link or a file on the way is named, since the store cannot be made under it. */
+async function nearestExisting(path: string, store: string): Promise<string> {
+  for (let dir = path; ; dir = dirname(dir)) {
+    const info = await stat(dir).catch((err: unknown) => {
+      if (ABSENT.has(codeOf(err))) return null;
+      throw new Error(`apply: could not check ${dir} (${codeOf(err)}). ${nextStep(err)}`, { cause: err });
+    });
+    if (info?.isDirectory()) return dir;
+    if (info) throw new Error(`apply: ${dir} is a file, and the new store ${store} cannot be made under a file, so nothing was written. Pick another store path with sync-agent-docs plan --store <folder>.`);
+    const to = await danglingLink(dir, 'apply');
+    if (to !== null) {
+      throw new Error(`apply: ${dir} is a link to ${to}, which does not exist, and the new store ${store} would be created under it, so nothing was written. Point the link at a folder or delete it, or pick another store path with sync-agent-docs plan --store <folder>.`);
+    }
+  }
 }
 
 async function exists(path: string): Promise<boolean> {
@@ -93,8 +102,8 @@ async function exists(path: string): Promise<boolean> {
     await lstat(path);
     return true;
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
-    throw new Error(`apply: could not check ${path} (${(err as NodeJS.ErrnoException).code ?? (err as Error).message}). Check its permissions.`, { cause: err });
+    if (ABSENT.has(codeOf(err))) return false;
+    throw new Error(`apply: could not check ${path} (${codeOf(err)}). ${nextStep(err)}`, { cause: err });
   }
 }
 
@@ -103,7 +112,7 @@ async function readOrNull(path: string, stage = 'apply'): Promise<string | null>
     return await readFile(path, 'utf8');
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    throw new Error(`${stage}: could not read ${path} (${(err as NodeJS.ErrnoException).code ?? (err as Error).message}). Check its permissions.`, { cause: err });
+    throw new Error(`${stage}: could not read ${path} (${codeOf(err)}). ${nextStep(err)}`, { cause: err });
   }
 }
 
@@ -206,7 +215,7 @@ export async function runApply(root: string, opts: ApplyOptions): Promise<ApplyE
         real = await realpath(path);
         text = await readFile(real, 'utf8');
       } catch (err) {
-        throw new Error(`apply: could not read ${show(path)} (${(err as NodeJS.ErrnoException).code ?? (err as Error).message}), so nothing was written; run sync-agent-docs plan again.`, { cause: err });
+        throw new Error(`apply: could not read ${show(path)} (${codeOf(err)}), so nothing was written. ${nextStep(err)} Then run sync-agent-docs plan again.`, { cause: err });
       }
       checkEdits(text, edits, show(path));
       const repo = await toplevelOf(real);
@@ -224,11 +233,12 @@ export async function runApply(root: string, opts: ApplyOptions): Promise<ApplyE
     const storeExists = await exists(storeDir);
     let storeParent: string | null = null;
     if (!storeExists) {
+      const nearest = await nearestExisting(dirname(storeDir), storeDir);
       try {
-        storeParent = await toplevelOf(await nearestExisting(dirname(storeDir)));
+        storeParent = await toplevelOf(nearest);
       } catch (err) {
         if (err instanceof GitError) throw err;
-        throw new Error(`apply: could not check where the new store ${storeDir} would be created (${(err as NodeJS.ErrnoException).code ?? (err as Error).message}), so nothing was written. Check that the folders above it exist and are readable, or pick another store path with sync-agent-docs plan --store <folder>.`, { cause: err });
+        throw new Error(`apply: could not check where the new store ${storeDir} would be created (${codeOf(err)}), so nothing was written. Check that the folders above it exist and are readable, or pick another store path with sync-agent-docs plan --store <folder>.`, { cause: err });
       }
       if (storeParent && (await isDirty(storeParent))) {
         throw new Error(`apply: ${storeParent} has uncommitted changes and the new store ${storeDir} would be created inside it, so nothing was written. Commit or stash them there, or pick another store path with sync-agent-docs plan --store <folder> outside that repo.`);

@@ -3,6 +3,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import ignore, { type Ignore } from 'ignore';
 import type { RepoInfo, SkippedFile } from '../types.js';
+import { codeOf, nextStep } from '../paths.js';
 
 /** Directories never worth descending into: dependencies, build output, our own scratch. */
 export const SKIP_DIRS = new Set([
@@ -23,7 +24,7 @@ export async function loadIgnore(dir: string, skipped: SkippedFile[] = []): Prom
     const code = (err as NodeJS.ErrnoException).code;
     if (code === 'EACCES' || code === 'EPERM') noteUnreadable(skipped, join(dir, '.gitignore'), code);
     else if (code !== 'ENOENT') {
-      throw new Error(`discover: could not read ${join(dir, '.gitignore')} (${(err as Error).message}). Check its permissions.`, { cause: err });
+      throw new Error(`discover: could not read ${join(dir, '.gitignore')} (${codeOf(err)}). ${nextStep(err)}`, { cause: err });
     }
   }
   return ig;
@@ -63,7 +64,7 @@ async function worktreeMain(dir: string, root: string, skipped: SkippedFile[]): 
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === 'EACCES' || code === 'EPERM') noteUnreadable(skipped, join(dir, '.git'), code);
-    else throw new Error(`discover: could not read ${join(dir, '.git')} (${(err as Error).message}). Check its permissions.`, { cause: err });
+    else throw new Error(`discover: could not read ${join(dir, '.git')} (${codeOf(err)}). ${nextStep(err)}`, { cause: err });
     return null;
   }
   const gitdir = /^gitdir:\s*(.+?)\s*$/m.exec(text)?.[1];

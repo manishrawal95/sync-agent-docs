@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { appendFile, mkdir, readdir, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises';
+import { appendFile, chmod, mkdir, readdir, readFile, readlink, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { ApplyEntry } from '../src/apply/branches.js';
@@ -209,6 +209,23 @@ describe('compile', () => {
     expect(notes.join('\n')).toMatch(/blog\/CLAUDE\.md is a link to AGENTS\.md/);
   });
 
+  it('compile adds no card import for a store path with a space, keeps the facts, and says how to fix it', async () => {
+    const { root, home, store } = await merged();
+    await changeStore(store);
+    const spaced = join(home, 'my truth');
+    await rename(store, spaced);
+    const { entry, notes } = await runCompile(root, { home, store: spaced, now: LATER });
+    const claude = git(join(root, 'shop'), 'show', `${BRANCH}:CLAUDE.md`);
+    expect(entry?.repos.map((r) => r.path)).toContain(join(root, 'shop'));
+    expect(claude).not.toContain('my truth');
+    expect(claude).not.toContain('projects/shop.md');
+    expect(claude).toContain('| port | `4400` | verified |');
+    const note = notes.join('\n');
+    expect(note).toContain('~/my truth');
+    expect(note).toMatch(/cannot hold whitespace/);
+    expect(note).toMatch(/Move the store to a path without spaces/);
+  });
+
   it('compile follows an agent-file link only to another agent file, leaving scripts and .git alone', async () => {
     const { root, store, compile } = await merged();
     const blog = join(root, 'blog');
@@ -314,5 +331,29 @@ describe('compile: an agent path that is not a file', () => {
     const { notes } = await compile();
     expect(notes).toContain(`${path} is a folder, not a file, so compile skipped it. Rename the folder, or delete it.`);
     expect(await readdir(path)).toEqual([]);
+  });
+
+  it('a file named .github is no folder for Copilot, so compile treats Copilot as absent and still runs', async () => {
+    const { root, store, compile } = await merged();
+    await changeStore(store);
+    await writeFile(join(root, 'shop', '.github'), 'not a folder\n');
+    const { entry } = await compile();
+    expect(entry).not.toBeNull();
+    expect(await readFile(join(root, 'shop', '.github'), 'utf8')).toBe('not a folder\n');
+  });
+
+  it.skipIf(process.getuid?.() === 0)('an unreadable CLAUDE.md is named with its path, code and the fix', async () => {
+    const { root, compile } = await merged();
+    const path = join(root, 'shop', 'CLAUDE.md');
+    await chmod(path, 0o000);
+    try {
+      const err = await compile().then(() => null, (e: Error) => e);
+      expect(err?.message).toContain('compile: could not read');
+      expect(err?.message).toContain(path);
+      expect(err?.message).toContain('EACCES');
+      expect(err?.message).toContain('Check its permissions.');
+    } finally {
+      await chmod(path, 0o644);
+    }
   });
 });

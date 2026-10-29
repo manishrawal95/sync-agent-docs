@@ -3,6 +3,7 @@ import { link, lstat, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { rmSync, readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { openDotDir } from './dotdir.js';
+import { codeOf, nextStep } from './paths.js';
 
 export type LockedCommand = 'plan' | 'apply' | 'compile' | 'rollback';
 export interface LockHolder { pid: number; startedAt: string; command: LockedCommand }
@@ -24,8 +25,6 @@ interface LockSite { folder: string; lock: string; place: string }
 
 /** Locks this process holds now, as `<lock path>\0<startedAt>`: a lock naming this pid is live only when it is one of these. */
 const held = new Set<string>();
-
-const codeOf = (err: unknown): string => (err as NodeJS.ErrnoException).code ?? (err as Error).message;
 
 /** Whether a process with this pid exists (EPERM counts as alive); any other failure is thrown as it came. */
 export function isAlive(pid: number): boolean {
@@ -179,7 +178,7 @@ async function storeGitDir(dir: string, command: LockedCommand): Promise<string 
   const dotGit = join(dir, '.git');
   const info = await lstat(dotGit).catch((err: NodeJS.ErrnoException) => {
     if (err.code === 'ENOENT' || err.code === 'ENOTDIR') return null;
-    throw new Error(`${command}: could not check ${dotGit} (${codeOf(err)}), so nothing was written. Check its permissions and run sync-agent-docs ${command} again.`, { cause: err });
+    throw new Error(`${command}: could not check ${dotGit} (${codeOf(err)}), so nothing was written. ${nextStep(err)} Then run sync-agent-docs ${command} again.`, { cause: err });
   });
   return info?.isDirectory() ? dotGit : null;
 }

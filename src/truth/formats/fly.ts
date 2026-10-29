@@ -7,6 +7,6 @@ export const parseFly: FormatParser = (text) => {
   const ports = [config.http_service?.internal_port, ...(Array.isArray(config.services) ? config.services.map((s) => s.internal_port) : [])];
   const facts: ParsedFact[] = ports
     .filter((p): p is number => typeof p === 'number')
-    .map((p) => ({ attribute: 'port', value: String(p), line: lineOf(text, String(p)), app }));
+    .map((p) => ({ attribute: 'port', value: String(p), line: lineOf(text, new RegExp(`internal_port\\s*=\\s*${p}\\b`)), app }));
   return { apps: app ? [app] : [], facts, corpus: app ? [app] : [] };
 };

@@ -433,13 +433,30 @@ describe('a store under the scan root', () => {
     expect(entry.storeParent).toBe(join(root, 'ops'));
     expect(renderApplySummary(entry)).toContain('is a new git repo nested inside');
   });
-  it('a store path under a dangling link stops apply naming the store, with nothing written', async () => {
+  it('a store path under a file stops apply before any write, naming the file', async () => {
+    const { root, store, apply } = await planned(recommended, { storeAt: (r) => join(r, 'notes.txt', 'truth') });
+    // Plan refuses a store under a file, so the file appears between plan and apply.
+    await writeFile(join(root, 'notes.txt'), 'not a folder\n');
+    const tipsBefore = tips(root);
+    const err = await apply().then(() => null, (e: Error) => e);
+    expect(err?.message).toContain(`${join(root, 'notes.txt')} is a file`);
+    expect(err?.message).toContain('cannot be made under a file');
+    expect(err?.message).toContain('nothing was written');
+    expect(err?.message).toContain('sync-agent-docs plan --store <folder>');
+    expect(await readFile(join(root, 'notes.txt'), 'utf8')).toBe('not a folder\n');
+    await expect(stat(store)).rejects.toThrow();
+    expect(tips(root)).toEqual(tipsBefore);
+    for (const r of ['ops', 'shop', 'blog']) expect(git(join(root, r), 'branch', '--list', 'sync-agent-docs/*')).toBe('');
+  });
+
+  it('a store path under a dangling link stops apply naming the link and its target, with nothing written', async () => {
     const { root, store, apply } = await planned(recommended, {
       storeAt: (r) => join(r, 'gone', 'truth'),
       prepare: async (_store, r) => symlink(join(r, 'missing-target'), join(r, 'gone')),
     });
     const err = await apply().then(() => null, (e: Error) => e);
-    expect(err?.message).toContain(`could not check where the new store ${store} would be created`);
+    expect(err?.message).toContain(`${join(root, 'gone')} is a link to ${join(root, 'missing-target')}, which does not exist`);
+    expect(err?.message).toContain('nothing was written');
     expect(err?.message).toContain('sync-agent-docs plan --store');
     await expect(stat(store)).rejects.toThrow();
     for (const r of ['ops', 'shop', 'blog']) expect(git(join(root, r), 'branch', '--list', 'sync-agent-docs/*')).toBe('');
@@ -524,6 +541,27 @@ describe('a store under the scan root', () => {
     await expect(apply()).rejects.toThrow(/apply: shop\/CLAUDE\.md is a link to scripts\/agent\.sh, which is not an agent file, so nothing was written\. Items: .+\. Run sync-agent-docs plan again/);
     expect(await readFile(join(shop, 'scripts', 'agent.sh'), 'utf8')).toBe(before);
     expect(git(shop, 'branch', '--list', 'sync-agent-docs/*')).toBe('');
+  });
+
+  it('two identical secret lines in one file are both removed and the rest of the file is untouched', async () => {
+    const filler = Array.from({ length: 36 }, (_, n) => `Note ${n + 1}`);
+    let before: string[] = [];
+    const { root, plan, apply } = await planned(undefined, {
+      prepare: async (_store, r) => {
+        const shop = join(r, 'shop');
+        const lines = (await readFile(join(shop, 'AGENTS.md'), 'utf8')).split('\n');
+        before = [...lines.slice(0, 3), ...filler, lines[2] as string, ''];
+        await writeFile(join(shop, 'AGENTS.md'), before.join('\n'));
+        git(shop, 'add', '-A');
+        git(shop, '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'commit', '-qm', 'twin secret');
+      },
+    });
+    expect(plan.items.filter((i) => i.tier === 'secret')).toHaveLength(2);
+    await apply();
+    const after = await readFile(join(root, 'shop', 'AGENTS.md'), 'utf8');
+    // Apply then appends the compiled block, so everything above it must match the file minus the two lines.
+    expect(after.startsWith([...before.slice(0, 2), ...filler].join('\n') + '\n\n<!-- sync-agent-docs:begin')).toBe(true);
+    expect(after).not.toContain(before[2] as string);
   });
 
   it('a secret in a file an agent-file link points at is left for rotation by hand and never recorded as removed', async () => {

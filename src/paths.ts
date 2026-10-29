@@ -4,8 +4,27 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 /** Codes for a path that holds no file, so nothing is loaded from it. */
 export const NOT_THERE: ReadonlySet<string> = new Set(['ENOENT', 'ENOTDIR', 'ELOOP']);
 
+/** Codes for a path that is absent: nothing there, or a file where a folder would be. A link loop is not absent, so it is named. */
+export const ABSENT: ReadonlySet<string> = new Set(['ENOENT', 'ENOTDIR']);
+
 /** The error's code, or its message when it has none. */
 export const codeOf = (err: unknown): string => (err as NodeJS.ErrnoException).code ?? (err as Error).message;
+
+/** What to do about a failed filesystem call, by its error code. */
+export function nextStep(err: unknown): string {
+  switch (codeOf(err)) {
+    case 'ELOOP': return 'A link in the path leads back to itself; fix or delete that link.';
+    case 'ENOTDIR': return 'Part of the path is a file, not a folder; move it or pick another path.';
+    case 'EACCES':
+    case 'EPERM': return 'Check its permissions.';
+    case 'EISDIR': return 'The path is a folder, not a file; pick the file inside it.';
+    case 'ENOSPC': return 'The disk is full; free some space and try again.';
+    case 'EROFS': return 'The disk is read-only; pick a writable path.';
+    case 'EMFILE':
+    case 'ENFILE': return 'Too many files are open; close some programs and try again.';
+    default: return 'Check the path and try again.';
+  }
+}
 
 /** Files under the scan root relative to it, files under home as `~/...`, anything else as is. */
 export function shortPath(path: string, root: string, home: string): string {
@@ -20,9 +39,8 @@ export async function resolveReal(path: string, stage: string): Promise<string> 
     try {
       return join(await realpath(at), ...tail.reverse());
     } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if ((code !== 'ENOENT' && code !== 'ENOTDIR') || dirname(at) === at) {
-        throw new Error(`${stage}: could not resolve ${path} (${code ?? (err as Error).message}). Check its permissions.`, { cause: err });
+      if (!ABSENT.has(codeOf(err)) || dirname(at) === at) {
+        throw new Error(`${stage}: could not resolve ${path} (${codeOf(err)}). ${nextStep(err)}`, { cause: err });
       }
       tail.push(basename(at));
     }
@@ -47,8 +65,8 @@ export async function isDir(path: string, stage: string): Promise<boolean> {
   try {
     return (await stat(path)).isDirectory();
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
-    throw new Error(`${stage}: could not check ${path} (${(err as NodeJS.ErrnoException).code ?? (err as Error).message}). Check its permissions.`, { cause: err });
+    if (ABSENT.has(codeOf(err))) return false;
+    throw new Error(`${stage}: could not check ${path} (${codeOf(err)}). ${nextStep(err)}`, { cause: err });
   }
 }
 
@@ -60,8 +78,8 @@ export async function linkLoop(path: string, stage: string): Promise<boolean> {
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === 'ELOOP') return true;
-    if (code === 'ENOENT') return false;
-    throw new Error(`${stage}: could not check ${path} (${codeOf(err)}). Check its permissions.`, { cause: err });
+    if (ABSENT.has(code ?? '')) return false;
+    throw new Error(`${stage}: could not check ${path} (${codeOf(err)}). ${nextStep(err)}`, { cause: err });
   }
 }
 
@@ -71,16 +89,15 @@ export async function danglingLink(path: string, stage: string): Promise<string 
     await stat(path);
     return null;
   } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code !== 'ENOENT') throw new Error(`${stage}: could not check ${path} (${codeOf(err)}). Check its permissions.`, { cause: err });
+    if (!ABSENT.has(codeOf(err))) throw new Error(`${stage}: could not check ${path} (${codeOf(err)}). ${nextStep(err)}`, { cause: err });
   }
   try {
     return await readlink(path);
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
-    // EINVAL: a regular path, ENOENT: nothing there at all; neither is a link.
-    if (code === 'EINVAL' || code === 'ENOENT') return null;
-    throw new Error(`${stage}: could not read the link ${path} (${code ?? (err as Error).message}). Check its permissions.`, { cause: err });
+    // EINVAL: a regular path, ENOENT and ENOTDIR: nothing there at all; none is a link.
+    if (code === 'EINVAL' || code === 'ENOENT' || code === 'ENOTDIR') return null;
+    throw new Error(`${stage}: could not read the link ${path} (${codeOf(err)}). ${nextStep(err)}`, { cause: err });
   }
 }
 
