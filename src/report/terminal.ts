@@ -11,10 +11,17 @@ export const AGENT_LABELS: Record<AgentFormat, string> = {
 const plural = (n: number, one: string, many = `${one}s`): string => `${n.toLocaleString('en-US')} ${n === 1 ? one : many}`;
 
 // eslint-disable-next-line no-control-regex
-const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g;
+const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g;
 
-/** Doc text and file names can carry ANSI escapes; drop C0/C1 controls (tab and newline kept) before printing. */
+/** Doc text and file names can carry ANSI escapes; drop C0/C1 controls (tab and newline kept) and bidi embedding, override and isolate controls, which reorder what the terminal shows, before printing. */
 export const printable = (s: string): string => s.replace(CONTROL, '');
+
+/**
+ * `value` as indented JSON for stdout. JSON.stringify escapes C0 controls but leaves DEL, C1 and bidi controls raw, so those become
+ * \uXXXX here: the text stays valid JSON that parses back to the same value, and a terminal cannot act on it. The one writer of --json output.
+ */
+export const jsonText = (value: unknown): string =>
+  JSON.stringify(value, null, 2).replace(CONTROL, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
 
 /** Repo files relative to the scan root, home files as `~/...`, anything else as is. */
 export function displayPath(path: string, root: string): string {

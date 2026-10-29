@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { chmod, mkdtemp, realpath, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -30,6 +30,14 @@ describe('cli', () => {
     expect(rollback).toContain('the last apply or compile');
   });
 
+  it('a failing command names its stage once', async () => {
+    const dir = await temp();
+    const r = spawnSync('node', [...cli, 'rollback', dir], { encoding: 'utf8' });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/^sync-agent-docs rollback failed: nothing to roll back;/);
+    expect(r.stderr).not.toContain('failed: rollback:');
+  });
+
   it('a path holding terminal escapes is printed without them, for every command', async () => {
     const dir = join(await temp(), 'shop\u001b]0;X\u0007\u001b[2Jnope');
     for (const cmd of ['scan', 'plan', 'apply', 'rollback', 'compile', 'doctor']) {
@@ -51,6 +59,21 @@ describe('cli', () => {
     expect(r.status).not.toBe(0);
     expect(r.stderr).toMatch(/unknown option '--x\]0;owned'/);
     expect(r.stderr.includes('\u001b') || r.stderr.includes('\u0007')).toBe(false);
+  });
+
+  it('--json escapes C1 and bidi controls as \\uXXXX, so the text round-trips and reorders nothing on a terminal', async () => {
+    const root = await temp();
+    const name = 'shop\u202e\u009bx';
+    const repo = join(root, name);
+    await mkdir(repo);
+    execFileSync('git', ['init', '-q'], { cwd: repo });
+    await writeFile(join(repo, 'CLAUDE.md'), '# Shop\n\nRuns on port 3300.\n');
+    const r = spawnSync('node', [...cli, 'scan', root, '--json'], { encoding: 'utf8', env: { ...process.env, HOME: root, NO_COLOR: '1' } });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain('\\u202e');
+    expect(r.stdout).toContain('\\u009b');
+    expect(r.stdout).not.toMatch(/[\u0080-\u009f\u202a-\u202e\u2066-\u2069]/);
+    expect(JSON.stringify(JSON.parse(r.stdout))).toContain(name);
   });
 
   it('scan, plan --json --accept-auto, apply, rollback through the CLI', async () => {
@@ -169,6 +192,6 @@ describe('cli', () => {
     await writeFile(join(root, '.sync-agent-docs', 'checks.json'), JSON.stringify({ schema: 1, disabled: ['rescna'] }));
     const bad = run('doctor', root);
     expect(bad.status).toBe(2);
-    expect(bad.stderr).toMatch(/^sync-agent-docs doctor failed: doctor: .*checks\.json: disabled\[0\] is "rescna"/);
+    expect(bad.stderr).toMatch(/^sync-agent-docs doctor failed: .*checks\.json: disabled\[0\] is "rescna"/);
   });
 });

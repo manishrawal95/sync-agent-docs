@@ -9,6 +9,9 @@ const TLDS = new Set([
 ]);
 const FS_ROOTS = new Set(['etc', 'opt', 'var', 'usr', 'home', 'Users', 'root', 'srv', 'tmp', 'Library', 'private', 'mnt', 'Volumes']);
 
+/** Public DNS resolvers a doc names as a setting; they never name one of the user's hosts. Exact match only. */
+const PUBLIC_RESOLVERS: ReadonlySet<string> = new Set(['1.1.1.1', '8.8.8.8', '8.8.4.4', '9.9.9.9']);
+
 const IPV4 = /(?<![\w.])(\d{1,3}(?:\.\d{1,3}){3})(?!\w)/g;
 // A name after a single `/` is a file in a path (`scripts/deploy.app`); after `//` it is a URL's host.
 const DOMAIN = /(?<![\w@.-])(?<!(?:^|[^/])\/)((?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+([a-z]{2,}))(?![\w-]|\.[a-z0-9])/gi;
@@ -25,7 +28,7 @@ const SHELL_LANGS = new Set(['bash', 'sh', 'shell', 'zsh', 'console']);
 
 /**
  * Infra values a doc line mentions; ignores loopback, unspecified, link-local, multicast, netmasks, CIDR,
- * documentation ranges and version strings, which never name a real host.
+ * documentation ranges, public DNS resolvers and version strings, which never name a real host.
  */
 function ipsIn(line: string): string[] {
   const ips: string[] = [];
@@ -39,6 +42,7 @@ function ipsIn(line: string): string[] {
     // Loopback, unspecified, link-local, multicast and netmasks (255.255.255.0) name no host.
     if (octets[0] === 127 || octets[0] === 0 || (octets[0] ?? 0) >= 224 || (octets[0] === 169 && octets[1] === 254)) continue;
     if (/^(?:192\.0\.2|198\.51\.100|203\.0\.113)\./.test(ip)) continue;
+    if (PUBLIC_RESOLVERS.has(ip)) continue;
     ips.push(ip);
   }
   return ips;

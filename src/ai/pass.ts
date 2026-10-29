@@ -2,28 +2,64 @@ import { execFile } from 'node:child_process';
 import { access, constants, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
-import { promisify } from 'node:util';
 import { lineHasSecret } from '../claims/secrets.js';
 import { decisionKey } from '../plan/decisions.js';
 import type { PlanItem } from '../plan/types.js';
 import type { Entity, Fact } from '../types.js';
-
-const run = promisify(execFile);
 
 export type AgentCli = 'claude' | 'codex' | 'gemini';
 const CLIS: readonly AgentCli[] = ['claude', 'codex', 'gemini'];
 /**
  * How each CLI runs with no tool access, for the CLIs whose help confirms such a mode. The prompt
  * holds text from scanned files, so the agent must not be able to read, write or run anything.
+ * The prompt goes on stdin, since argv is readable by every local user through ps.
  * claude: no built-in tools, no MCP servers, and dontAsk denies anything not pre-approved.
  * codex and gemini are left out until their tools-off flags are confirmed.
  */
-const TOOLS_OFF: Partial<Record<AgentCli, (prompt: string) => string[]>> = {
-  claude: (p) => ['-p', p, '--permission-mode', 'dontAsk', '--strict-mcp-config', '--tools', ''],
+const TOOLS_OFF: Partial<Record<AgentCli, readonly string[]>> = {
+  claude: ['-p', '--permission-mode', 'dontAsk', '--strict-mcp-config', '--tools', ''],
 };
 
 /** Whether sync-agent-docs knows how to run `cli` with every tool off. */
 export const runsWithToolsOff = (cli: AgentCli): boolean => cli in TOOLS_OFF;
+
+/**
+ * Runs `file` with `input` on its standard input and resolves its stdout. Rejects like execFile does
+ * (`code` and `signal`), and never puts `input` in the error. EPIPE means the command closed its input
+ * before reading it all: that is ignored when the command fails (its exit code is the error, with the
+ * stdin error as cause) and is a failure of its own, code EPIPE, when the command exits 0.
+ */
+export function runWithInput(file: string, args: readonly string[], input: string, opts: { cwd: string; timeoutMs: number; maxBuffer: number }): Promise<string> {
+  return new Promise((resolve, reject) => {
+    // The command's exit and its stdin closing arrive in either order; the outcome is settled when both have.
+    let stdinError: NodeJS.ErrnoException | undefined;
+    let stdinClosed = false;
+    let exit: { err: Error | null; stdout: string } | undefined;
+    const settle = (): void => {
+      if (!exit || !stdinClosed) return;
+      if (exit.err) {
+        if (stdinError) exit.err.cause ??= stdinError;
+        reject(exit.err);
+      } else if (stdinError) {
+        reject(Object.assign(new Error(`${file} exited but did not read the whole prompt (${stdinError.code ?? stdinError.message}), so its answer was not used. Run sync-agent-docs plan again, or without --ai.`, { cause: stdinError }), { code: stdinError.code }));
+      } else {
+        resolve(exit.stdout);
+      }
+    };
+    const child = execFile(file, args, { cwd: opts.cwd, timeout: opts.timeoutMs, maxBuffer: opts.maxBuffer }, (err, stdout) => {
+      exit = { err, stdout };
+      settle();
+    });
+    child.stdin?.on('error', (e: NodeJS.ErrnoException) => {
+      stdinError = e;
+    });
+    child.stdin?.on('close', () => {
+      stdinClosed = true;
+      settle();
+    });
+    child.stdin?.end(input);
+  });
+}
 
 /** The full path of `cli` in the first folder of `path` (a PATH string) that holds it as an executable. */
 async function findOnPath(cli: AgentCli, path: string): Promise<string | null> {
@@ -121,9 +157,9 @@ export async function aiQuestions(cli: AgentCli, ask: AiPrompt, entities: Entity
   });
   let stdout: string;
   try {
-    ({ stdout } = await run(file, args(ask.prompt), { cwd, maxBuffer: 8 * 1024 * 1024, timeout: 10 * 60 * 1000 }));
+    stdout = await runWithInput(file, args, ask.prompt, { cwd, timeoutMs: 10 * 60 * 1000, maxBuffer: 8 * 1024 * 1024 });
   } catch (err) {
-    // The error text repeats the command line, which holds the prompt, so only its exit code is shown.
+    // Only the exit code and signal are shown, never the error text.
     const e = err as { code?: number | string; signal?: string | null };
     throw new Error(`plan --ai: ${file} failed (exit ${e.code ?? 'unknown'}${e.signal ? `, ${e.signal}` : ''}). Check that ${cli} is logged in, or run sync-agent-docs plan without --ai.`, { cause: err });
   } finally {

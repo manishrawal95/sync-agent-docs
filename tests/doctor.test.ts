@@ -1,8 +1,8 @@
-import { lstat, readFile, rm, symlink, utimes, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { renderDoctor } from '../src/doctor/run.js';
-import { applied, check, commit } from './helpers/doctor.js';
+import { applied, check, commit, git } from './helpers/doctor.js';
 
 /** shop's CLAUDE.md with one line added inside its compiled block. */
 async function editBlock(root: string) {
@@ -139,5 +139,94 @@ describe('doctor: compiled blocks and views', () => {
     } finally {
       await rm(target, { force: true });
     }
+  });
+});
+
+describe('doctor: a failed run removes the old result', () => {
+  it('a failed run deletes the doctor.json an earlier run left', async () => {
+    const { root, home, doctor } = await applied({ answerAll: true });
+    await doctor();
+    const saved = join(root, '.sync-agent-docs', 'doctor.json');
+    await expect(stat(saved)).resolves.toBeTruthy();
+    await expect(doctor({ store: join(home, 'elsewhere') })).rejects.toThrow(/doctor: .*elsewhere/);
+    await expect(stat(saved)).rejects.toThrow(/ENOENT/);
+  });
+
+  it('a bad checks.json also leaves no doctor.json behind', async () => {
+    const { root, doctor } = await applied({ answerAll: true });
+    await doctor();
+    await writeFile(join(root, '.sync-agent-docs', 'checks.json'), '{');
+    await expect(doctor()).rejects.toThrow(/checks\.json is not valid JSON/);
+    await expect(stat(join(root, '.sync-agent-docs', 'doctor.json'))).rejects.toThrow(/ENOENT/);
+  });
+
+  it('a .sync-agent-docs that git tracks is refused and nothing in it is deleted', async () => {
+    const { root, doctor } = await applied({ answerAll: true });
+    await doctor();
+    git(root, 'init', '-q', '-b', 'main');
+    git(root, 'add', '-f', '.sync-agent-docs/doctor.json');
+    await expect(doctor()).rejects.toThrow(/git tracks files in/);
+    await expect(stat(join(root, '.sync-agent-docs', 'doctor.json'))).resolves.toBeTruthy();
+  });
+
+  it('a doctor.json that cannot be deleted is named in the error, which still carries the original failure', async () => {
+    const { root, home, doctor } = await applied({ answerAll: true });
+    const saved = join(root, '.sync-agent-docs', 'doctor.json');
+    await rm(saved, { force: true });
+    await mkdir(join(saved, 'inner'), { recursive: true });
+    const err = (await doctor({ store: join(home, 'elsewhere') }).catch((e: unknown) => e)) as Error;
+    expect(err.message).toMatch(/doctor: .*elsewhere/);
+    expect(err.message).toContain(`It also could not delete the old ${saved}`);
+    expect(err.message).toContain('delete it by hand');
+    expect(err.cause).toBeInstanceOf(Error);
+  });
+});
+
+describe('doctor: why a compiled block counts as edited', () => {
+  it('a compiled block whose hash line is gone says so, under the same key', async () => {
+    const { root, doctor } = await applied({ answerAll: true });
+    const path = join(root, 'shop', 'CLAUDE.md');
+    await writeFile(path, (await readFile(path, 'utf8')).replace(/<!-- sync-agent-docs:hash [0-9a-f]{16} -->\n/, ''));
+    commit(join(root, 'shop'), 'lost hash line');
+    const f = check(await doctor(), 'compiled').findings;
+    expect(f).toEqual([expect.objectContaining({ key: 'compiled:shop/CLAUDE.md:edited', level: 'drift' })]);
+    expect(f[0]?.message).toMatch(/hash line is missing/);
+  });
+
+  it('a body edit says the body no longer matches its hash', async () => {
+    const { root, doctor } = await applied({ answerAll: true });
+    await editBlock(root);
+    expect(check(await doctor(), 'compiled').findings[0]?.message).toMatch(/body no longer matches its hash/);
+  });
+
+  it('a compiled block with its end marker deleted says its markers are broken', async () => {
+    const { root, doctor } = await applied({ answerAll: true });
+    const path = join(root, 'shop', 'CLAUDE.md');
+    await writeFile(path, (await readFile(path, 'utf8')).replace('<!-- sync-agent-docs:end compiled -->\n', ''));
+    commit(join(root, 'shop'), 'lost end marker');
+    const f = check(await doctor(), 'compiled').findings;
+    expect(f).toEqual([expect.objectContaining({ key: 'compiled:shop/CLAUDE.md:edited', level: 'drift' })]);
+    expect(f[0]?.message).toMatch(/markers are broken/);
+    expect(f[0]?.message).toContain('block compiled has no end marker. Restore it or delete the block.');
+  });
+});
+
+describe('doctor: an agent path that is not a readable file', () => {
+  it('a CLAUDE.md that links to itself is skipped like a missing file, and doctor completes', async () => {
+    const { root, doctor } = await applied({ answerAll: true });
+    const path = join(root, 'shop', 'CLAUDE.md');
+    await rm(path);
+    await symlink('CLAUDE.md', path);
+    const r = await doctor();
+    expect(check(r, 'compiled').status).not.toBe('error');
+    expect(check(r, 'compiled').findings.filter((f) => f.key.startsWith('compiled:shop/CLAUDE.md:edited'))).toEqual([]);
+  });
+
+  it('a CLAUDE.md that is a folder is skipped too, and doctor completes', async () => {
+    const { root, doctor } = await applied({ answerAll: true });
+    const path = join(root, 'shop', 'CLAUDE.md');
+    await rm(path);
+    await mkdir(path);
+    expect(check(await doctor(), 'compiled').findings.filter((f) => f.key.startsWith('compiled:shop/CLAUDE.md:edited'))).toEqual([]);
   });
 });

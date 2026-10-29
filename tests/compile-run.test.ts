@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { appendFile, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, readdir, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { ApplyEntry } from '../src/apply/branches.js';
@@ -124,6 +124,24 @@ describe('compile', () => {
     await expect(compile(LAST)).rejects.toThrow(/shop\/CLAUDE\.md[\s\S]*sync-agent-docs plan/);
     expect(await readFile(path, 'utf8')).toBe(edited);
     expect(git(join(root, 'shop'), 'branch', '--list', 'sync-agent-docs/compile-20261022-121000')).toBe('');
+  });
+
+  it('compile words its refusal by why the block counts as edited: a changed body, or a lost hash line', async () => {
+    const { root, store, compile } = await merged();
+    await changeStore(store);
+    merge((await compile()).entry);
+    const path = join(root, 'shop', 'CLAUDE.md');
+    const original = await readFile(path, 'utf8');
+    await writeFile(path, original.replace('| port | `4400` |', '| port | `4401` |'));
+    commit(join(root, 'shop'), 'hand edit');
+    await changeStore(store, '4500');
+    await expect(compile(LAST)).rejects.toThrow(/the compiled block was edited by hand in shop\/CLAUDE\.md/);
+    await writeFile(path, original.replace(/<!-- sync-agent-docs:hash [0-9a-f]{16} -->\n/, ''));
+    commit(join(root, 'shop'), 'lose hash line');
+    const err = await compile(LAST).catch((e: unknown) => e as Error);
+    if (!(err instanceof Error)) throw new Error('compile should have refused');
+    expect(err.message).toMatch(/^compile: the compiled block's hash line is missing in shop\/CLAUDE\.md, so sync-agent-docs cannot tell it from a hand edit; a damaged marker looks the same\. Nothing was written\. Run sync-agent-docs plan/);
+    expect(err.message).not.toContain('edited by hand');
   });
 
   it('a remembered discard lets compile overwrite the edit, and keep leaves the file alone', async () => {
@@ -274,5 +292,27 @@ describe('compile', () => {
     const text = notes.join('\n');
     expect(text).toMatch(/up to date/);
     expect(text).toMatch(/sync-agent-docs\/apply-20261022-130000 is not merged in the truth store, so compile used the store without it\. Merge it, then run sync-agent-docs compile again\./);
+  });
+});
+
+describe('compile: an agent path that is not a file', () => {
+  it('a CLAUDE.md that links to itself is skipped with a link-loop note, and nothing is written through it', async () => {
+    const { root, compile } = await merged();
+    const path = join(root, 'shop', 'CLAUDE.md');
+    await rm(path);
+    await symlink('CLAUDE.md', path);
+    const { notes } = await compile();
+    expect(notes).toContain(`${path} is a link loop, so compile skipped it. Delete the link or point it at a file.`);
+    expect(await readlink(path)).toBe('CLAUDE.md');
+  });
+
+  it('a CLAUDE.md that is a folder is skipped with a folder note, and nothing is written into it', async () => {
+    const { root, compile } = await merged();
+    const path = join(root, 'shop', 'CLAUDE.md');
+    await rm(path);
+    await mkdir(path);
+    const { notes } = await compile();
+    expect(notes).toContain(`${path} is a folder, not a file, so compile skipped it. Rename the folder, or delete it.`);
+    expect(await readdir(path)).toEqual([]);
   });
 });

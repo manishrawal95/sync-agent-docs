@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { aiPrompt, aiQuestions, aiSubject, detectAgentCli, runsWithToolsOff } from '../ai/pass.js';
 import { openDotDir, refuseTrackedDotDir } from '../dotdir.js';
+import { withLock } from '../lock.js';
 import { checkStorePath, resolveReal, shortPath } from '../paths.js';
 import { runScan, type ScanOptions } from '../scan.js';
 import { readJsonFile, readStore, writeJsonAtomic } from '../store/io.js';
@@ -132,39 +133,41 @@ async function handAnswers(root: string, note: ((t: string) => void) | undefined
 export async function runPlan(root: string, opts: PlanOptions): Promise<Plan> {
   const now = opts.now ?? new Date();
   await refuseTrackedDotDir(root, 'plan');
-  const scan = opts.useScan ? await latestScan(root) : await runScan(root, opts);
-  const storeDir = await resolveStore(root, opts.home, opts.store);
-  const store = await readStore(storeDir);
-  const decisions = await readDecisions(root, storeDir);
-  const show = (p: string): string => shortPath(p, root, opts.home);
-  const plan = await buildPlan({
-    scan, decisions, store: storeDir, home: opts.home, now, views: store?.config.views,
-    viewItems: store ? [...(await detectViewEdits(storeDir, store)), ...(await detectCompiledEdits(root, store, { storeDir, home: opts.home }))] : [],
-  });
-  for (const i of plan.items) if (i.answer === null && store && settledByStore(store.facts, i)) Object.assign(i, { answer: 'approve', answeredBy: 'remembered' });
-  if (opts.ai) plan.items.push(...(await aiPass(plan, decisions, { ...opts, ai: opts.ai }, show)));
-  const typed = await handAnswers(root, opts.note);
-  for (const i of plan.items) {
-    const last = typed.get(i.key);
-    if (!last || last.answer === i.answer || !i.options.includes(last.answer)) continue;
-    // An earlier remembered answer is stale when nothing settles the item now. Any other earlier
-    // answer that differs from a settled item's is a hand edit: plan.json is the edit surface.
-    if (i.answer === null && last.by === 'remembered') continue;
-    Object.assign(i, { answer: last.answer, answeredBy: 'hand' });
-  }
-  const made = [];
-  if (opts.acceptAuto) {
+  return withLock(root, 'plan', async () => {
+    const scan = opts.useScan ? await latestScan(root) : await runScan(root, opts);
+    const storeDir = await resolveStore(root, opts.home, opts.store);
+    const store = await readStore(storeDir);
+    const decisions = await readDecisions(root, storeDir);
+    const show = (p: string): string => shortPath(p, root, opts.home);
+    const plan = await buildPlan({
+      scan, decisions, store: storeDir, home: opts.home, now, views: store?.config.views,
+      viewItems: store ? [...(await detectViewEdits(storeDir, store)), ...(await detectCompiledEdits(root, store, { storeDir, home: opts.home }))] : [],
+    });
+    for (const i of plan.items) if (i.answer === null && store && settledByStore(store.facts, i)) Object.assign(i, { answer: 'approve', answeredBy: 'remembered' });
+    if (opts.ai) plan.items.push(...(await aiPass(plan, decisions, { ...opts, ai: opts.ai }, show)));
+    const typed = await handAnswers(root, opts.note);
     for (const i of plan.items) {
-      if (i.tier !== 'auto' || i.answer !== null) continue;
-      Object.assign(i, { answer: 'approve', answeredBy: 'flag' });
-      made.push(toDecision(i, 'approve', now));
+      const last = typed.get(i.key);
+      if (!last || last.answer === i.answer || !i.options.includes(last.answer)) continue;
+      // An earlier remembered answer is stale when nothing settles the item now. Any other earlier
+      // answer that differs from a settled item's is a hand edit: plan.json is the edit surface.
+      if (i.answer === null && last.by === 'remembered') continue;
+      Object.assign(i, { answer: last.answer, answeredBy: 'hand' });
     }
-  }
-  if (opts.asker) made.push(...(await askOpenQuestions(plan.items, opts.asker, now, show)));
-  if (made.length) await rememberDecisions(root, made);
-  const dir = await openDotDir(root, 'plan');
-  await writeJsonAtomic(join(dir, 'plan.json'), plan);
-  return plan;
+    const made = [];
+    if (opts.acceptAuto) {
+      for (const i of plan.items) {
+        if (i.tier !== 'auto' || i.answer !== null) continue;
+        Object.assign(i, { answer: 'approve', answeredBy: 'flag' });
+        made.push(toDecision(i, 'approve', now));
+      }
+    }
+    if (opts.asker) made.push(...(await askOpenQuestions(plan.items, opts.asker, now, show)));
+    if (made.length) await rememberDecisions(root, made);
+    const dir = await openDotDir(root, 'plan');
+    await writeJsonAtomic(join(dir, 'plan.json'), plan);
+    return plan;
+  });
 }
 
 export function renderPlanSummary(plan: Plan): string {

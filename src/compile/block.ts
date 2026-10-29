@@ -11,6 +11,14 @@ const hashLine = (hash: string): string => `<!-- sync-agent-docs:hash ${hash} --
 /** `recorded` is the hash compile wrote (null when its line is gone); `actual` is the body's hash now. */
 export interface CompiledBlock { body: string; recorded: string | null; actual: string }
 
+export type EditReason = 'hash-missing' | 'body-changed';
+
+/** Why a block counts as edited, or null when its hash matches. */
+export function editReason(block: CompiledBlock): EditReason | null {
+  if (block.recorded === null) return 'hash-missing';
+  return block.recorded !== block.actual ? 'body-changed' : null;
+}
+
 /** The compiled block in `text`, or null when there is none. Broken markers throw, naming the block. */
 export function readCompiledBlock(text: string): CompiledBlock | null {
   const raw = readBlocks(text)[COMPILED_ID];

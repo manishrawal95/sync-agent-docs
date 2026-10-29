@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { renderHtml } from '../src/report/html.js';
 import { renderSvg } from '../src/report/svg.js';
+import { displayPath, printable } from '../src/report/terminal.js';
 import { runScan } from '../src/scan.js';
 import type { ScanResult } from '../src/types.js';
 import { materializeFixture } from './helpers/fixture.js';
@@ -47,5 +48,12 @@ describe('reports', () => {
     const { root, result } = await fixtureScan();
     expect(await readFile(join(root, '.sync-agent-docs', 'report.html'), 'utf8')).toBe(renderHtml(result));
     expect(await readFile(join(root, '.sync-agent-docs', 'score.svg'), 'utf8')).toBe(renderSvg(result));
+  });
+
+  it('printable drops bidi embedding, override and isolate controls', () => {
+    const bidi = '\u202A\u202B\u202C\u202D\u202E\u2066\u2067\u2068\u2069';
+    expect(printable(`a${bidi}b`)).toBe('ab');
+    expect(printable('tab\there\nnext')).toBe('tab\there\nnext');
+    expect(displayPath('/r/shop/\u202Edm.EDUALC', '/r')).toBe('shop/dm.EDUALC');
   });
 });

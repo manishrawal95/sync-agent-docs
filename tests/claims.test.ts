@@ -64,6 +64,14 @@ describe('extractMentions', () => {
     expect(values(text, 'command')).toEqual(['pm2 restart shop']);
   });
 
+  it('public resolver addresses are not host IPs', () => {
+    expect(values('Resolvers: 1.1.1.1, 8.8.8.8, 8.8.4.4 and 9.9.9.9; the box is 100.64.1.2', 'ip')).toEqual(['100.64.1.2']);
+  });
+
+  it('addresses that only look like a resolver are still read', () => {
+    expect(values('hosts 8.8.8.80, 18.8.8.8 and 1.1.1.10', 'ip')).toEqual(['8.8.8.80', '18.8.8.8', '1.1.1.10']);
+  });
+
   it('skips lines that hold a secret', () => {
     expect(extractMentions(doc, `API_TOKEN=${fakeToken()} on 10.9.8.7\n`)).toEqual([]);
   });
