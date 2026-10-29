@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, readFile, realpath, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -126,6 +126,77 @@ describe('apply, plan and doctor keep what the owner wrote', () => {
     await runPlan(fx.root, opts);
     const again = JSON.parse(await readFile(path, 'utf8')) as Plan;
     expect(again.items.find((i) => i.key === conflict.key)?.answer).toBe(conflict.answer);
+  });
+
+  it('a remembered answer changed by hand in plan.json survives the next plan', async () => {
+    const fx = await materializeFixture('messy-dev', { commit: true });
+    const store = join(fx.home, 'truth');
+    const opts = { home: fx.home, reposOnly: false, crontabCommand: 'false', store, now: NOW };
+    const asker = { print: () => undefined, ask: (q: string) => Promise.resolve(/Enter to skip/.test(q) ? '1' : '') };
+    await runPlan(fx.root, { ...opts, asker });
+    const path = join(fx.root, '.sync-agent-docs', 'plan.json');
+    const remembered = await runPlan(fx.root, opts);
+    const picked = remembered.items.filter((i) => i.answeredBy === 'remembered');
+    const [edited, untouched] = picked.filter((i) => i.options.length > 1);
+    if (!edited || !untouched) throw new Error('fixture has fewer than two remembered items with a choice');
+    const other = edited.options.find((o) => o !== edited.answer);
+    // Only the answer is typed; the owner leaves answeredBy as plan wrote it.
+    edited.answer = other ?? null;
+    await writeFile(path, JSON.stringify(remembered));
+    await runPlan(fx.root, opts);
+    const again = JSON.parse(await readFile(path, 'utf8')) as Plan;
+    expect(again.items.find((i) => i.key === edited.key)).toMatchObject({ answer: other, answeredBy: 'hand' });
+    expect(again.items.find((i) => i.key === untouched.key)).toMatchObject({ answer: untouched.answer, answeredBy: 'remembered' });
+  });
+
+  it('a hand change to a remembered answer survives a second plan', async () => {
+    const fx = await materializeFixture('messy-dev', { commit: true });
+    const store = join(fx.home, 'truth');
+    const opts = { home: fx.home, reposOnly: false, crontabCommand: 'false', store, now: NOW };
+    const asker = { print: () => undefined, ask: (q: string) => Promise.resolve(/Enter to skip/.test(q) ? '1' : '') };
+    await runPlan(fx.root, { ...opts, asker });
+    const path = join(fx.root, '.sync-agent-docs', 'plan.json');
+    const remembered = await runPlan(fx.root, opts);
+    const edited = remembered.items.find((i) => i.answeredBy === 'remembered' && i.options.length > 1);
+    if (!edited) throw new Error('fixture has no remembered item with a choice');
+    const other = edited.options.find((o) => o !== edited.answer);
+    edited.answer = other ?? null;
+    await writeFile(path, JSON.stringify(remembered));
+    await runPlan(fx.root, opts);
+    await runPlan(fx.root, opts);
+    const third = JSON.parse(await readFile(path, 'utf8')) as Plan;
+    expect(third.items.find((i) => i.key === edited.key)).toMatchObject({ answer: other, answeredBy: 'hand' });
+  });
+
+  it('a remembered answer the store no longer settles comes back unanswered, not as a hand answer', async () => {
+    const fx = await materializeFixture('messy-dev', { commit: true });
+    const store = join(fx.home, 'truth');
+    const opts = { home: fx.home, reposOnly: false, crontabCommand: 'false', store, now: NOW };
+    const asker = { print: () => undefined, ask: (q: string) => Promise.resolve(/Enter to skip/.test(q) ? '1' : '') };
+    await runPlan(fx.root, { ...opts, asker });
+    const remembered = (await runPlan(fx.root, opts)).items.find((i) => i.answeredBy === 'remembered' && i.tier === 'conflict');
+    if (!remembered) throw new Error('fixture has no remembered conflict');
+    await rm(join(fx.root, '.sync-agent-docs', 'decisions.json'));
+    const again = await runPlan(fx.root, opts);
+    expect(again.items.find((i) => i.key === remembered.key)).toMatchObject({ answer: null });
+  });
+
+  it('an answer in the last plan.json wins over a different remembered answer, since plan.json is the hand-edit surface', async () => {
+    const fx = await materializeFixture('messy-dev', { commit: true });
+    const store = join(fx.home, 'truth');
+    const opts = { home: fx.home, reposOnly: false, crontabCommand: 'false', store, now: NOW };
+    const asker = { print: () => undefined, ask: (q: string) => Promise.resolve(/Enter to skip/.test(q) ? '1' : '') };
+    const first = await runPlan(fx.root, { ...opts, asker });
+    const asked = first.items.find((i) => i.answeredBy === 'prompt' && i.options.length > 1);
+    if (!asked) throw new Error('fixture has no prompted item with a choice');
+    const other = asked.options.find((o) => o !== asked.answer) ?? '';
+    // decisions.json now says something else than the answer in the last plan.json; plan.json is the file people edit.
+    const decisions = join(fx.root, '.sync-agent-docs', 'decisions.json');
+    const saved = JSON.parse(await readFile(decisions, 'utf8')) as { decisions: { key: string; answer: string }[] };
+    for (const d of saved.decisions) if (d.key === asked.key) d.answer = other;
+    await writeFile(decisions, JSON.stringify(saved));
+    const again = await runPlan(fx.root, opts);
+    expect(again.items.find((i) => i.key === asked.key)).toMatchObject({ answer: asked.answer, answeredBy: 'hand' });
   });
 
   it('doctor with a mistyped option exits 2 (doctor failed), not 1 (drift)', () => {

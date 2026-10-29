@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { extractMentions } from '../src/claims/extract.js';
-import { findSecrets, mask } from '../src/claims/secrets.js';
+import { findSecrets, lineHasSecret, mask } from '../src/claims/secrets.js';
 import type { Attribute, SourceFile } from '../src/types.js';
 
 const doc: SourceFile = {
@@ -98,6 +98,28 @@ describe('findSecrets', () => {
   it('a placeholder like API_TOKEN=<your-token> is not a secret', () => {
     const text = 'API_TOKEN=<your-token>\nAPI_TOKEN=${API_TOKEN}\nREDIRECT_URI=https://app.example.com/linkedin/callback\nKEY_PATH=/etc/ssl/private/server.pem\nAPI_TOKEN=xxxxxxxxxxxxxxxxxxxxxxxx\n';
     expect(findSecrets(doc, text)).toEqual([]);
+  });
+
+  // Not a known-prefix token, so only the assignment shapes can catch it.
+  const plainToken = () => 'tf' + 'Q2x9Lm4Rt7Vb1Nc8Zk3Hy6Wd';
+
+  it('a secret-named key with a colon is a secret', () => {
+    const tok = plainToken();
+    const line = `api_key: ${tok}  # shop on 100.64.1.2`;
+    expect(lineHasSecret(line)).toBe(true);
+    const found = findSecrets(doc, `${line}\n`);
+    expect(found).toHaveLength(1);
+    expect(JSON.stringify(found)).not.toContain(tok.slice(4));
+  });
+
+  it('a token in a URL query is a secret even with more parameters after it', () => {
+    const tok = plainToken();
+    expect(lineHasSecret(`Webhook https://hooks.example.com/cb?token=${tok}&env=prod`)).toBe(true);
+    expect(lineHasSecret(`Webhook https://hooks.example.com/cb?token=${tok};env=prod`)).toBe(true);
+  });
+
+  it('a secret-named key with a plain word value is not a secret', () => {
+    for (const line of ['password: changeme', 'token: true', 'author: Jane Doe']) expect(lineHasSecret(line)).toBe(false);
   });
 
   it('truth files are not searched', () => {

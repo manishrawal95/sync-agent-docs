@@ -4,6 +4,7 @@ import { basename } from 'node:path';
 import { readApplies } from '../../apply/branches.js';
 import { lineHasSecret } from '../../claims/secrets.js';
 import { storePath } from '../../compile/deps.js';
+import { isMachinePath } from '../../discover/machine.js';
 import { buildPlan, settledByStore } from '../../plan/build.js';
 import type { PlanItem } from '../../plan/types.js';
 import { shortPath } from '../../paths.js';
@@ -79,10 +80,16 @@ export const factChecksCheck: Check = {
     const { facts } = await ctx.scan();
     const { root } = ctx.store.config;
     const out: Found[] = [];
+    let skipped = 0;
     for (const f of ctx.store.facts) {
       const c = f.check;
       if (!c) continue;
       const path = storePath(c.path, root, ctx.home);
+      // A --repos-only scan never reads machine files, so a fact checked against one cannot be rechecked.
+      if (ctx.reposOnly && isMachinePath(ctx.home, path)) {
+        skipped++;
+        continue;
+      }
       if (facts.some((x) => x.kind === 'truth' && x.at.path === path && x.attribute === c.attribute && x.value === c.value)) continue;
       // Commands are read from package.json scripts by plan, not by the scan, so check them the same way.
       if (c.attribute === 'command' && basename(path) === 'package.json' && (await packageCommands(path))?.includes(c.value)) continue;
@@ -95,6 +102,7 @@ export const factChecksCheck: Check = {
         path: shown,
       });
     }
+    if (skipped) out.push({ key: 'fact-checks:repos-only', level: 'note', message: `${skipped} facts from machine files were not rechecked (--repos-only).` });
     return out;
   },
 };

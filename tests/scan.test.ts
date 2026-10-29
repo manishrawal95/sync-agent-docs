@@ -190,4 +190,12 @@ describe('scan', () => {
     const result = await runScan(root, { home, reposOnly: true, crontabCommand: 'sync-agent-docs-test-no-crontab', now: new Date('2026-10-21T12:00:00Z') });
     expect(result.facts.some((f) => f.at.path === join(root, 'ops', 'CLAUDE.md') && f.at.line === 4)).toBe(true);
   });
+
+  it('ps -p in a doc raises no port conflict', async () => {
+    const { root, home } = await materializeFixture('messy-dev');
+    await writeFile(join(root, 'ops', 'CLAUDE.md'), '# ops\n\nCheck it with `ps -p 48213`\n');
+    const result = await scan(root, home);
+    expect(JSON.stringify(result.facts)).not.toContain('48213');
+    expect(JSON.stringify(result.findings)).not.toContain('48213');
+  });
 });

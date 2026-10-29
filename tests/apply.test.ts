@@ -127,6 +127,19 @@ describe('apply', () => {
     expect(secrets.secrets).toEqual([{ path: 'shop/AGENTS.md', line: 3, status: 'removed' }]);
   });
 
+  it('a secret in a file outside git is not reported removed', async () => {
+    const token = 'ghp_' + 'Ab9'.repeat(12);
+    const { store, apply } = await planned(recommended, {
+      prepare: async (_store, root) => { await appendFile(join(root, '..', '.claude', 'CLAUDE.md'), `GITHUB_TOKEN=${token}\n`); },
+    });
+    const entry = await apply();
+    const facts = JSON.parse(git(store, 'show', `${BRANCH}:store/facts.json`)) as { secrets: { path: string; status: string }[] };
+    expect(facts.secrets.find((s) => s.path === '~/.claude/CLAUDE.md')?.status).toBe('manual');
+    const summary = renderApplySummary(entry);
+    expect(summary).toContain('Not removed: ~/.claude/CLAUDE.md:');
+    expect(summary).not.toContain('ghp_');
+  });
+
   it('adopting an existing repo keeps its hand-written hosts.md prose', async () => {
     const { store, apply } = await planned(recommended, { prepare: handRepo });
     await apply();
@@ -200,10 +213,9 @@ describe('apply', () => {
     expect(git(ops, 'status', '--porcelain')).toBe('');
   });
 
-  it('an ignored file in a repo gets a patch instead of an edit', async () => {
+  it('an untracked file in a repo gets a patch instead of an edit', async () => {
     const { root, apply } = await planned(recommended, {
       prepare: async (_store, r) => {
-        await appendFile(join(r, 'shop', '.git', 'info', 'exclude'), 'notes.md\n');
         await writeFile(join(r, 'shop', 'notes.md'), '# notes\n\nshop runs on port 4000\n');
       },
     });
@@ -215,7 +227,7 @@ describe('apply', () => {
     const notes = patches.find((p) => p.includes(join(shop, 'notes.md')));
     expect(notes).toContain('git does not track it');
     expect(notes).toContain('-shop runs on port 4000');
-    expect(git(shop, 'status', '--porcelain')).toBe('');
+    expect(git(shop, 'status', '--porcelain')).toBe('?? notes.md');
   });
 
   it('a failure partway through undoes every repo touched so far', async () => {
@@ -386,6 +398,35 @@ describe('apply', () => {
 });
 
 describe('a store under the scan root', () => {
+  it('a new store inside a repo with uncommitted changes is refused before any write', async () => {
+    const { root, store, apply } = await planned(recommended, {
+      storeAt: (r) => join(r, 'ops', 'truth'),
+      prepare: async (_s, r) => appendFile(join(r, 'ops', 'hosts.md'), 'edited by hand\n'),
+    });
+    const parent = join(root, 'ops');
+    const err = await apply().then(() => null, (e: Error) => e);
+    expect(err?.message).toContain(`${parent} has uncommitted changes`);
+    expect(err?.message).toContain('another store path');
+    await expect(stat(store)).rejects.toThrow();
+    for (const r of ['ops', 'shop', 'blog']) expect(git(join(root, r), 'branch', '--list', 'sync-agent-docs/*')).toBe('');
+  });
+  it('a new store inside a clean repo is made and the summary says it is nested', async () => {
+    const { root, apply } = await planned(recommended, { storeAt: (r) => join(r, 'ops', 'truth') });
+    const entry = await apply();
+    expect(entry.storeParent).toBe(join(root, 'ops'));
+    expect(renderApplySummary(entry)).toContain('is a new git repo nested inside');
+  });
+  it('a store path under a dangling link stops apply naming the store, with nothing written', async () => {
+    const { root, store, apply } = await planned(recommended, {
+      storeAt: (r) => join(r, 'gone', 'truth'),
+      prepare: async (_store, r) => symlink(join(r, 'missing-target'), join(r, 'gone')),
+    });
+    const err = await apply().then(() => null, (e: Error) => e);
+    expect(err?.message).toContain(`could not check where the new store ${store} would be created`);
+    expect(err?.message).toContain('sync-agent-docs plan --store');
+    await expect(stat(store)).rejects.toThrow();
+    for (const r of ['ops', 'shop', 'blog']) expect(git(join(root, r), 'branch', '--list', 'sync-agent-docs/*')).toBe('');
+  });
   it('a second plan after drift never edits the store or its views as claims', async () => {
     const { root, store, home, apply } = await planned(recommended, { storeAt: (r) => join(r, 'truth') });
     await apply();

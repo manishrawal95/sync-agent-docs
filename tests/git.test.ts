@@ -1,9 +1,9 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, readdir, realpath, symlink, utimes, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, realpath, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { blameLine, commitAll, currentBranch, git, isDirty, isIgnored, isTracked, shortReason, toplevelOf } from '../src/git.js';
+import { blameLine, commitAll, currentBranch, git, GitError, ignoredPaths, isDirty, isIgnored, isTracked, shortReason, toplevelOf } from '../src/git.js';
 
 const temp = async () => realpath(await mkdtemp(join(tmpdir(), 'sync-agent-docs-git-')));
 const sh = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
@@ -17,6 +17,25 @@ async function repo(): Promise<string> {
 }
 
 describe('git', () => {
+  it('ignoredPaths returns only the paths git ignores', async () => {
+    const dir = await repo();
+    await mkdir(join(dir, 'docs'));
+    await writeFile(join(dir, 'docs', '.gitignore'), 'private.md\n');
+    await writeFile(join(dir, '.git', 'info', 'exclude'), 'local.md\n');
+    expect(await ignoredPaths(dir, ['docs/private.md', 'local.md', 'README.md'], 'scan')).toEqual(new Set(['docs/private.md', 'local.md']));
+    expect(await ignoredPaths(dir, ['README.md', 'docs/public.md'], 'scan')).toEqual(new Set());
+    expect(await ignoredPaths(dir, [], 'scan')).toEqual(new Set());
+  });
+
+  it('ignoredPaths on a folder that is not a repo rejects with a GitError, even with more paths than the pipe holds', async () => {
+    const dir = await temp();
+    const paths = Array.from({ length: 60000 }, (_, n) => `docs/file-${n}.md`);
+    const err = await ignoredPaths(dir, paths, 'scan').then(() => null, (e: Error) => e);
+    expect(err).toBeInstanceOf(GitError);
+    expect(err?.message).toMatch(/could not read the ignore rules/);
+    expect(err?.message).toContain(dir);
+  });
+
   it('isDirty sees a changed tracked file but not an untracked one', async () => {
     const dir = await repo();
     expect(await isDirty(dir)).toBe(false);

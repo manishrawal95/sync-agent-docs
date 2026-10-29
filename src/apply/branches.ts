@@ -18,8 +18,8 @@ export interface ApplyRepo { path: string; branch: string; original: string; com
 /** `kind` is absent on entries written before compile existed; those are applies. */
 /** A manual patch's target, and the sha256 of that file when apply wrote the patch: while it matches, the patch still applies. */
 export interface ManualTarget { file: string; patch: string; sha256: string }
-/** `targets` is absent on entries written before doctor read it. */
-export interface ApplyEntry { id: string; at: string; store: string; repos: ApplyRepo[]; manual: string[]; targets?: ManualTarget[]; skipped: string[]; secrets?: string[]; rolledBack?: string; kind?: BranchStage }
+/** `storeParent` is the work tree a new store was created inside; absent when the store stands alone or already existed. `targets` is absent on entries written before doctor read it. */
+export interface ApplyEntry { id: string; at: string; store: string; repos: ApplyRepo[]; manual: string[]; targets?: ManualTarget[]; skipped: string[]; secrets?: string[]; storeParent?: string; rolledBack?: string; kind?: BranchStage }
 export interface Applies { schema: 1; applies: ApplyEntry[] }
 /** What a repo had written to it, so a failure can put it back: tracked files are checked out again, created ones removed. */
 export interface Touched { repo: string; tracked: string[]; created: string[] }

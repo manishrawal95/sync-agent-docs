@@ -1,4 +1,4 @@
-import { isPort, portsInCommand } from '../truth/parsed.js';
+import { isPort, portsInDocLine } from '../truth/parsed.js';
 import type { Attribute, Mention, SourceFile } from '../types.js';
 import { lineHasSecret } from './secrets.js';
 
@@ -49,7 +49,7 @@ function domainsIn(line: string): string[] {
 }
 
 function portsIn(line: string): string[] {
-  const ports = portsInCommand(line);
+  const ports = portsInDocLine(line);
   for (const m of line.matchAll(HOST_PORT)) {
     const host = m[1] ?? '';
     const isHost = host === 'localhost' || /^\d/.test(host) || TLDS.has(host.split('.').pop()?.toLowerCase() ?? '');

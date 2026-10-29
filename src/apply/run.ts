@@ -3,7 +3,7 @@ import { lstat, mkdir, readFile, realpath } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { refusedLink } from '../compile/links.js';
 import { openDotDir, openSubDir, refuseTrackedDotDir, writeFresh } from '../dotdir.js';
-import { commitAll, git, isIgnored, isTracked, toplevelOf } from '../git.js';
+import { commitAll, git, GitError, isDirty, isIgnored, isTracked, toplevelOf } from '../git.js';
 import { machineClaimPaths } from '../discover/machine.js';
 import { checkStorePath, inside, resolveReal, shortPath } from '../paths.js';
 import { readDecisions } from '../plan/decisions.js';
@@ -78,6 +78,13 @@ function chosenEdits(plan: Plan, show: (p: string) => string): { byPath: Map<str
     }
   }
   return { byPath, itemsByPath };
+}
+
+/** The deepest folder at or above `path` that exists, where a store not yet made would land. */
+async function nearestExisting(path: string): Promise<string> {
+  let dir = path;
+  while (!(await exists(dir))) dir = dirname(dir);
+  return dir;
 }
 
 async function exists(path: string): Promise<boolean> {
@@ -200,10 +207,27 @@ export async function runApply(root: string, opts: ApplyOptions): Promise<ApplyE
     repoFiles.set(repo, [...(repoFiles.get(repo) ?? []), { real, text, edits, items: itemsByPath.get(path) ?? [] }]);
   }
 
+  // Files that only get a patch: the store records them, and a secret in one is not reported removed.
+  const manualPaths = new Set(manual.map((m) => m.path));
+
+  // A new store is `git init`ed where it stands, so the repo around it must be clean first.
+  const storeExists = await exists(storeDir);
+  let storeParent: string | null = null;
+  if (!storeExists) {
+    try {
+      storeParent = await toplevelOf(await nearestExisting(dirname(storeDir)));
+    } catch (err) {
+      if (err instanceof GitError) throw err;
+      throw new Error(`apply: could not check where the new store ${storeDir} would be created (${(err as NodeJS.ErrnoException).code ?? (err as Error).message}), so nothing was written. Check that the folders above it exist and are readable, or pick another store path with sync-agent-docs plan --store <folder>.`, { cause: err });
+    }
+    if (storeParent && (await isDirty(storeParent))) {
+      throw new Error(`apply: ${storeParent} has uncommitted changes and the new store ${storeDir} would be created inside it, so nothing was written. Commit or stash them there, or pick another store path with sync-agent-docs plan --store <folder> outside that repo.`);
+    }
+  }
+
   const originals = new Map<string, string>();
   for (const repo of repoFiles.keys()) originals.set(repo, await checkRepo(repo, branch, 'apply'));
 
-  const storeExists = await exists(storeDir);
   if (storeExists) {
     const top = await toplevelOf(storeDir);
     if (top !== (await realpath(storeDir))) {
@@ -225,7 +249,7 @@ export async function runApply(root: string, opts: ApplyOptions): Promise<ApplyE
   const stored = new Map(known.map((d) => [d.key, d.answer]));
   const answered = plan.items.filter((i) => i.answer !== null && (i.answeredBy !== 'remembered' || stored.get(i.key) !== i.answer));
   const decisions = [...known, ...answered.map((i) => toDecision(i, i.answer ?? '', now))];
-  const store = composeStore(prev, plan, decisions, opts.home, await foldedBlocks(storeDir, plan));
+  const store = composeStore(prev, plan, decisions, opts.home, await foldedBlocks(storeDir, plan), manualPaths);
   const openEdits = new Set(plan.items.filter((i) => i.kind === 'view-edit' && i.answer === null).map((i) => i.subject));
   const views = await renderViews(storeDir, store, openEdits);
   store.config.generated = Object.fromEntries([...views].map(([file, v]) => [file, v.hashes]));
@@ -264,7 +288,11 @@ export async function runApply(root: string, opts: ApplyOptions): Promise<ApplyE
   const entry: ApplyEntry = {
     id, at: now.toISOString(), store: storeDir, repos: [], manual: [],
     skipped: plan.items.filter((i) => i.answer === null).map((i) => i.title),
-    secrets: plan.items.filter((i) => i.secretAt && i.answer === 'rotate-manual').flatMap((i) => i.notes.filter((n) => n.startsWith('the secret stays in '))),
+    ...(storeParent ? { storeParent } : {}),
+    secrets: [
+      ...plan.items.filter((i) => i.secretAt && i.answer === 'rotate-manual').flatMap((i) => i.notes.filter((n) => n.startsWith('the secret stays in '))),
+      ...plan.items.filter((i) => i.kind === 'secret' && i.answer === 'rotate-remove').flatMap((i) => (i.edits['rotate-remove'] ?? []).filter((e) => manualPaths.has(e.path)).map((e) => `${show(e.path)}:${e.line} (patch written; rotate the key and apply the patch by hand)`)),
+    ],
   };
   // Checked before any branch exists, so a planted link stops the run with nothing to undo.
   const patches = manual.length ? await openSubDir(dot, 'manual', 'apply') : '';
@@ -321,6 +349,7 @@ export function renderApplySummary(entry: ApplyEntry): string {
     for (const m of entry.manual) lines.push(`  ${m}`);
   }
   for (const s of entry.secrets ?? []) lines.push(`Not removed: ${s}.`);
+  if (entry.storeParent) lines.push(`The store ${entry.store} is a new git repo nested inside ${entry.storeParent}.`);
   if (entry.skipped.length) lines.push(`${entry.skipped.length} open items were left alone; run sync-agent-docs plan to answer them.`);
   if (entry.repos.length) lines.push('Next: review each branch and merge it yourself, or run sync-agent-docs rollback to delete them.');
   return lines.join('\n');

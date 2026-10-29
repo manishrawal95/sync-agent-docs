@@ -16,6 +16,13 @@ export function corpusTokens(line: string): string[] {
 /** LaunchAgents and systemd user units: corpus only, for stale checks. */
 export const parseLaunchAgent: FormatParser = (text) => ({ corpus: text.split('\n').flatMap(corpusTokens) });
 
+const WORKFLOW_SECRET = /\bsecrets\.([A-Za-z_][A-Za-z0-9_]*)/g;
+
+/** GitHub workflows: the names read as `secrets.NAME`, for stale checks. Names only, never values. */
+export const parseGithubWorkflow: FormatParser = (text) => ({
+  corpus: text.split('\n').flatMap((line) => [...line.matchAll(WORKFLOW_SECRET)].map((m) => m[1] ?? '')),
+});
+
 /** ~/.gitconfig: paths only, streamed. */
 export async function parseGitConfig(path: string): Promise<Parsed> {
   const corpus: string[] = [];

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { bodyHash, outsideCompiled, readCompiledBlock, writeCompiledBlock } from '../src/compile/block.js';
-import { mergeView, readBlocks } from '../src/views/render.js';
+import { outsideCompiled, readCompiledBlock, writeCompiledBlock } from '../src/compile/block.js';
+import { blockHash, mergeView, readBlocks } from '../src/views/render.js';
 
 const BODY = '## Facts from the truth store\n\n| port | 3300 | verified |';
 
@@ -9,7 +9,7 @@ describe('compiled block', () => {
     const text = writeCompiledBlock('# Shop\n', BODY);
     const block = readCompiledBlock(text);
     expect(block?.body).toBe(BODY);
-    expect(block?.recorded).toBe(bodyHash(BODY));
+    expect(block?.recorded).toBe(blockHash(BODY));
     expect(block?.actual).toBe(block?.recorded);
   });
 

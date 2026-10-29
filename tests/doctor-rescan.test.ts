@@ -1,9 +1,12 @@
 import { randomBytes } from 'node:crypto';
-import { appendFile, readdir, readFile, writeFile } from 'node:fs/promises';
+import { appendFile, readdir, readFile, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { renderDoctor } from '../src/doctor/run.js';
-import { applied, check, commit } from './helpers/doctor.js';
+import { factChecksCheck } from '../src/doctor/checks/rescan.js';
+import type { DoctorContext } from '../src/doctor/types.js';
+import { renderDoctor, runDoctor } from '../src/doctor/run.js';
+import { readStore } from '../src/store/io.js';
+import { applied, check, commit, NOW } from './helpers/doctor.js';
 
 describe('doctor: rescan and fact checks', () => {
   it('after plan --accept-auto, apply and a merge, open items are a note and nothing fails', async () => {
@@ -42,10 +45,9 @@ describe('doctor: rescan and fact checks', () => {
     expect(c.findings).toContainEqual(expect.objectContaining({ level: 'drift', message: 'shop port: the store says 3300, but ~/.claude/CLAUDE.md:3 still says 4100. Run sync-agent-docs plan to settle it.' }));
   });
 
-  it('a file git excludes inside a repo gets the patch hint too', async () => {
+  it('an untracked file inside a repo gets the patch hint too', async () => {
     const { root, doctor } = await applied({ answerAll: true, before: async (fx) => {
-      // Scan honours .gitignore but not .git/info/exclude, so this file is read, and git never tracks it.
-      await appendFile(join(fx.root, 'blog', '.git', 'info', 'exclude'), 'LOCAL.md\n');
+      // Scan reads an untracked file git does not ignore, and apply can only patch it.
       await writeFile(join(fx.root, 'blog', 'LOCAL.md'), '# Local notes\n\nshop runs on port 4000\n');
     } });
     const patches = await readdir(join(root, '.sync-agent-docs', 'manual'));
@@ -85,6 +87,57 @@ describe('doctor: rescan and fact checks', () => {
     expect(c.status).toBe('drift');
     expect(c.findings).toEqual([expect.objectContaining({ key: 'fact-checks:project:shop|port|shop/ecosystem.config.cjs|3300', path: 'shop/ecosystem.config.cjs' })]);
     expect(c.findings[0]?.message).toContain('3300');
+  });
+
+  it('with --repos-only, machine-file facts are one note, not drift', async () => {
+    const { doctor } = await applied({ answerAll: true });
+    const full = check(await doctor(), 'fact-checks');
+    expect(full.findings.filter((f) => f.key === 'fact-checks:repos-only')).toEqual([]);
+    const c = check(await doctor({ reposOnly: true }), 'fact-checks');
+    expect(c.status).toBe('clean');
+    expect(c.findings).toEqual([expect.objectContaining({ key: 'fact-checks:repos-only', level: 'note', message: expect.stringMatching(/^[1-9]\d* facts from machine files were not rechecked \(--repos-only\)\.$/) })]);
+  });
+
+  it.each([
+    ['a LaunchAgents plist', ['Library', 'LaunchAgents', 'com.example.shop.plist']],
+    ['a systemd unit', ['.config', 'systemd', 'user', 'shop.service']],
+    ['a cursor rule', ['.cursor', 'rules', 'shop.mdc']],
+    ['a memory file', ['.claude', 'projects', '-Users-example-shop', 'memory', 'note.md']],
+  ])('with --repos-only, a fact checked against %s that has since been deleted is still a machine fact', async (_name, parts) => {
+    const { home, store } = await applied({ answerAll: true });
+    const loaded = await readStore(store);
+    if (!loaded) throw new Error('the applied fixture has no store');
+    const gone = join(home, ...parts);
+    loaded.facts.push({ entityId: 'project:shop', attribute: 'port', value: '3300', sources: [], status: 'verified', check: { kind: 'config', path: gone, attribute: 'port', value: '3300' } });
+    const ctx = { root: home, home, reposOnly: true, store: loaded, scan: () => Promise.resolve({ facts: [] }) } as unknown as DoctorContext;
+    const found = await factChecksCheck.run(ctx);
+    expect(found.filter((f) => f.path?.includes(parts.at(-1) ?? ''))).toEqual([]);
+    expect(found.filter((f) => f.key === 'fact-checks:repos-only')).toHaveLength(1);
+  });
+
+  it('with --repos-only and the scan root set to the home folder, machine files are still the ones not rechecked', async () => {
+    const { home, store } = await applied({ answerAll: true });
+    const loaded = await readStore(store);
+    if (!loaded) throw new Error('the applied fixture has no store');
+    const ctx = { root: home, home, reposOnly: true, store: loaded, scan: () => Promise.resolve({ facts: [] }) } as unknown as DoctorContext;
+    const found = await factChecksCheck.run(ctx);
+    expect(found.filter((f) => f.key === 'fact-checks:repos-only')).toEqual([expect.objectContaining({ level: 'note' })]);
+    expect(found.filter((f) => f.path?.startsWith('.claude') || f.path?.startsWith('~'))).toEqual([]);
+  });
+
+  it.each([
+    ['a root given with a trailing slash', async (root: string) => `${root}/`],
+    ['a root reached through a symlink', async (root: string) => {
+      const link = `${root}-link`;
+      await symlink(root, link);
+      return link;
+    }],
+  ])('with --repos-only, %s still counts repo facts as repo facts', async (_name, spell) => {
+    const { root, home, doctor } = await applied({ answerAll: true });
+    const expected = check(await doctor({ reposOnly: true }), 'fact-checks').findings;
+    const other = await runDoctor(await spell(root), { home, crontabCommand: 'false', now: NOW, reposOnly: true });
+    // Only the note: a scan through a symlink spells its paths differently, which is not what this checks.
+    expect(check(other, 'fact-checks').findings.filter((f) => f.level === 'note')).toEqual(expected);
   });
 
   it('commands approved from package.json pass fact-checks until a script is removed', async () => {

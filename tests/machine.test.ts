@@ -1,4 +1,4 @@
-import { chmod, mkdir, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { machineSources } from '../src/discover/machine.js';
@@ -90,5 +90,42 @@ describe('machine pass', () => {
     expect(machine.corpus).toContain('TOKEN');
     expect(machine.corpus.some((t) => t.includes('s3cret'))).toBe(false);
     expect(machine.read).toContain('crontab -l');
+  });
+
+  it('a file in ~/.claude/projects is skipped, not an error', async () => {
+    const { home } = await materializeFixture('messy-dev');
+    const projects = join(home, '.claude', 'projects');
+    await mkdir(join(projects, 'p1', 'memory'), { recursive: true });
+    await writeFile(join(projects, 'p1', 'memory', 'MEMORY.md'), '- note\n');
+    await writeFile(join(projects, '.DS_Store'), 'binary\n');
+    const machine = await machineSources(home, NO_CRONTAB);
+    expect(machine.sources.map((s) => s.path)).toContain(join(projects, 'p1', 'memory', 'MEMORY.md'));
+    expect(machine.sources.some((s) => s.path.includes('.DS_Store'))).toBe(false);
+  });
+
+  it('a project folder that is a link to a folder is read, and a link to a file is skipped', async () => {
+    const { home } = await materializeFixture('messy-dev');
+    const projects = join(home, '.claude', 'projects');
+    const real = join(home, 'elsewhere', 'p2');
+    await mkdir(join(real, 'memory'), { recursive: true });
+    await writeFile(join(real, 'memory', 'MEMORY.md'), '- note\n');
+    await writeFile(join(home, 'elsewhere', 'file.txt'), 'x\n');
+    await mkdir(projects, { recursive: true });
+    await symlink(real, join(projects, 'linked'));
+    await symlink(join(home, 'elsewhere', 'file.txt'), join(projects, 'linked-file'));
+    await writeFile(join(projects, '.DS_Store'), 'binary\n');
+    const machine = await machineSources(home, NO_CRONTAB);
+    expect(machine.sources.map((s) => s.path)).toContain(join(projects, 'linked', 'memory', 'MEMORY.md'));
+    expect(machine.skipped.filter((s) => s.path.startsWith(projects))).toEqual([]);
+  });
+
+  it('a link loop in ~/.claude/projects is listed as nothing and the other projects are still read', async () => {
+    const { home } = await materializeFixture('messy-dev');
+    const projects = join(home, '.claude', 'projects');
+    await mkdir(join(projects, 'p1', 'memory'), { recursive: true });
+    await writeFile(join(projects, 'p1', 'memory', 'MEMORY.md'), '- note\n');
+    await symlink('loop', join(projects, 'loop'));
+    const machine = await machineSources(home, NO_CRONTAB);
+    expect(machine.sources.map((s) => s.path)).toContain(join(projects, 'p1', 'memory', 'MEMORY.md'));
   });
 });

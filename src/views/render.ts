@@ -14,15 +14,16 @@ const FENCE = /^ {0,3}(`{3,}|~{3,})/;
 export interface Marker { kind: 'begin' | 'end'; id: string }
 
 /**
- * Each line's sync-agent-docs marker, or null. Outside a block, a fenced code block (``` or ~~~) is an
+ * Each line's sync-agent-docs marker, or null. A marker counts only at column 0. Outside a block, a fenced code block (``` or ~~~) is an
  * example someone wrote, so markers in it are not markers, unless a fence never closes. The one
  * place markers are recognised.
  */
 export function markerLines(lines: string[], fences = true): (Marker | null)[] {
   let fence: string | null = null;
   let open = false;
-  const marks = lines.map((line) => {
-    const t = line.replace(/\r$/, '');
+  const marks = lines.map((line, n) => {
+    // A byte order mark ahead of line 1 is not part of the marker.
+    const t = (n === 0 ? line.replace(/^\uFEFF/, '') : line).replace(/\r$/, '');
     if (fences && !open) {
       const f = FENCE.exec(t)?.[1];
       if (fence) {
@@ -34,7 +35,7 @@ export function markerLines(lines: string[], fences = true): (Marker | null)[] {
         return null;
       }
     }
-    const m = MARKER.exec(t.trim());
+    const m = MARKER.exec(t.trimEnd());
     if (!m) return null;
     open = m[1] === 'begin';
     return { kind: m[1] as Marker['kind'], id: m[2] as string };
@@ -53,8 +54,9 @@ export const cell = (s: string): string => code(s).replaceAll('|', '\\|');
 const fileName = (name: string, id: string): string =>
   name.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[.-]+/, '') || id.replace(/[^A-Za-z0-9._-]+/g, '-');
 
+/** The one hash of a block body; carriage returns are dropped so a CRLF checkout hashes like the LF file. */
 export function blockHash(body: string): string {
-  return createHash('sha256').update(body).digest('hex').slice(0, 16);
+  return createHash('sha256').update(body.replaceAll('\r', '')).digest('hex').slice(0, 16);
 }
 
 /** The view file an entity's facts live in, relative to the store. */

@@ -2,6 +2,7 @@ import { open, readFile, realpath, stat } from 'node:fs/promises';
 import type { Dirent } from 'node:fs';
 import { basename, join, relative, sep } from 'node:path';
 import type { Ignore } from 'ignore';
+import { ignoredPaths, toplevelOf } from '../git.js';
 import { insideStore } from '../store/inside.js';
 import { DEFAULT_VIEWS, type TruthConfig } from '../store/types.js';
 import type { AgentFormat, RepoInfo, SkippedFile, SourceFile, SourceFormat } from '../types.js';
@@ -22,6 +23,7 @@ const AGENT_FILES: Record<string, AgentFormat> = {
 function truthFormat(rel: string): SourceFormat | null {
   const name = basename(rel);
   if (name === 'package.json') return 'package-json';
+  if (/^\.github[\\/]workflows[\\/][^\\/]+\.ya?ml$/.test(rel)) return 'github-workflow';
   if (/^wrangler\.(toml|json|jsonc)$/.test(name)) return 'wrangler';
   if (name === 'vercel.json') return 'vercel-json';
   if (rel === join('.vercel', 'project.json') || rel.endsWith(sep + join('.vercel', 'project.json'))) return 'vercel-project';
@@ -117,13 +119,27 @@ async function collect(repo: RepoInfo, dir: string, ig: Ignore, out: SourceFile[
 }
 
 /**
+ * Drops what git ignores by rules the root .gitignore does not hold. A folder that is not a git repo keeps
+ * the root .gitignore rules alone; any other git failure stops the scan, since ignored files would be read.
+ */
+async function dropGitIgnored(repo: RepoInfo, files: SourceFile[]): Promise<SourceFile[]> {
+  if (!(await toplevelOf(repo.path))) return files;
+  const ignored = await ignoredPaths(repo.path, files.map((f) => relative(repo.path, f.path)), 'scan');
+  return files.filter((f) => {
+    const rel = relative(repo.path, f.path);
+    return !ignored.has(rel) || keptDespiteIgnore(basename(rel), false) || rel.split(sep).includes('.vercel');
+  });
+}
+
+/**
  * Every claim (docs, agent files) and truth (config) source in one repo, in path order. With `root`
  * (a real path), a symlink that resolves outside it is skipped.
  */
 export async function classifySources(repo: RepoInfo, skipped: SkippedFile[] = [], root: string | null = null): Promise<SourceFile[]> {
   const out: SourceFile[] = [];
   await collect(repo, repo.path, await loadIgnore(repo.path, skipped), out, skipped, root);
-  return out.sort((a, b) => a.path.localeCompare(b.path));
+  const kept = await dropGitIgnored(repo, out);
+  return kept.sort((a, b) => a.path.localeCompare(b.path));
 }
 
 /** Reads a file as UTF-8 text, or says why it was skipped. Never throws. */

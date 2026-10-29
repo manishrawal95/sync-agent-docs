@@ -65,6 +65,9 @@ export async function runRollback(root: string, now: Date = new Date()): Promise
       notes.push(`${r.path}: branch ${r.branch} was already gone.`);
       continue;
     }
+    if ((await branchTip(r.path, r.original)) === null) {
+      throw new Error(`rollback: ${r.path} has no branch ${r.original} to return to (it was renamed or deleted), so nothing was rolled back. Recreate it under that name (git branch ${r.original} <commit>) or fix that entry in ${appliesPath(root)}, then run sync-agent-docs rollback again.`);
+    }
     // A null commit means apply stopped in this repo before recording a commit, so only its own files may differ.
     const files = ownFiles(r);
     const own = r.commit === null ? await ownUnrecorded(r, files) : tip === r.commit;

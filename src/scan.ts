@@ -10,6 +10,7 @@ import { scoreOf } from './compare/score.js';
 import { machineSources } from './discover/machine.js';
 import { findRepos } from './discover/repos.js';
 import { classifySources, dedupeByRealPath, readTextSafe } from './discover/sources.js';
+import { mapLimited } from './pool.js';
 import { renderHtml } from './report/html.js';
 import { renderSvg } from './report/svg.js';
 import { linkMentions } from './link/link.js';
@@ -24,12 +25,15 @@ export interface ScanOptions {
   crontabCommand?: string;
 }
 
+/** Repos classified at once: each runs git, and a run over hundreds of repos must not exhaust processes or file handles. */
+const GIT_CONCURRENCY = 8;
+
 /** The whole pipeline, read-only: discover, parse truth, extract and link claims, compare, score. */
 export async function collectScan(root: string, opts: ScanOptions): Promise<ScanResult> {
   const skipped: SkippedFile[] = [];
   const repos = await findRepos(root, skipped);
   const realRoot = await realpath(root);
-  const repoSources = (await Promise.all(repos.map((r) => classifySources(r, skipped, realRoot)))).flat();
+  const repoSources = (await mapLimited(repos, GIT_CONCURRENCY, (r) => classifySources(r, skipped, realRoot))).flat();
   const machine = opts.reposOnly ? null : await machineSources(opts.home, { crontabCommand: opts.crontabCommand });
   const sources = dedupeByRealPath([...repoSources, ...(machine?.sources ?? [])]);
   skipped.push(...(machine?.skipped ?? []));

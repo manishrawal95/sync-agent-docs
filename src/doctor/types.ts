@@ -16,7 +16,7 @@ export interface DoctorResult { schema: 1; at: string; root: string; store: stri
 
 /** What every check reads, built once per run. */
 export interface DoctorContext {
-  root: string; home: string; now: Date; storeDir: string; store: Store; decisions: Decision[];
+  root: string; home: string; now: Date; reposOnly: boolean; storeDir: string; store: Store; decisions: Decision[];
   /** The rescan, made on first use and shared. */
   scan(): Promise<ScanResult>;
   /** The last plan.json, or null when plan never ran here. */

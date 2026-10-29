@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { lstat, mkdir, rename, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { git, toplevelOf } from './git.js';
 
@@ -15,6 +15,17 @@ async function realDotDir(out: string, stage: string): Promise<{ isDirectory(): 
   return existing;
 }
 
+/** Whether `file` is a regular file (not a link) holding just `*`, so an untouched `.gitignore` is not rewritten on every run. */
+async function gitignoreIsRight(file: string): Promise<boolean> {
+  const info = await lstat(file).catch((err: NodeJS.ErrnoException) => {
+    if (err.code === 'ENOENT') return null;
+    throw err;
+  });
+  if (!info?.isFile()) return false;
+  const text = await readFile(file, 'utf8');
+  return text === '*' || text === '*\n';
+}
+
 /**
  * Opens `<root>/.sync-agent-docs`, creating it with a `.gitignore` that ignores the folder itself.
  * Refuses a symlink or a file there, so nothing is ever written through a planted link.
@@ -24,7 +35,7 @@ export async function openDotDir(root: string, stage: string): Promise<string> {
   const existing = await realDotDir(out, stage);
   try {
     if (!existing) await mkdir(out);
-    await writeFresh(out, '.gitignore', '*\n');
+    if (!(await gitignoreIsRight(join(out, '.gitignore')))) await writeFresh(out, '.gitignore', '*\n');
   } catch (err) {
     throw new Error(`${stage}: could not write ${out} (${(err as NodeJS.ErrnoException).code ?? (err as Error).message}). Make the folder writable and run the ${stage} again.`, { cause: err });
   }

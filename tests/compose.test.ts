@@ -23,4 +23,15 @@ describe('composeStore', () => {
     expect(next.facts.filter((f) => f.entityId === 'project:shop' && f.attribute === 'port').map((f) => f.value)).toEqual(['3400']);
     expect(next.facts.filter((f) => f.entityId !== 'project:shop')).toEqual(others);
   });
+
+  it('a rotate-remove whose file went to a manual patch is recorded manual', async () => {
+    const fx = await materializeFixture('messy-dev', { commit: true });
+    const plan = await runPlan(fx.root, { home: fx.home, reposOnly: false, crontabCommand: 'false', store: join(fx.home, 'truth'), now: NOW });
+    const item = plan.items.find((i) => i.tier === 'secret');
+    const abs = item?.edits['rotate-remove']?.[0]?.path;
+    if (!item || !abs) throw new Error('fixture has no secret item with a rotate-remove edit');
+    item.answer = 'rotate-remove';
+    expect(composeStore(null, plan, [], fx.home).secrets.map((s) => s.status)).toEqual(['removed']);
+    expect(composeStore(null, plan, [], fx.home, [], new Set([abs])).secrets.map((s) => s.status)).toEqual(['manual']);
+  });
 });

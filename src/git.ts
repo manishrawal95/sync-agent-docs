@@ -52,8 +52,29 @@ async function readGuards(cwd: string): Promise<NodeJS.ProcessEnv> {
   return env;
 }
 
-const run = async (file: string, args: string[], opts: { cwd: string; maxBuffer?: number }) =>
-  exec(file, args, { ...opts, env: await guardedEnv(opts.cwd) });
+const run = async (file: string, args: string[], opts: { cwd: string; maxBuffer?: number; input?: string }) => {
+  const { input, ...rest } = opts;
+  const pending = exec(file, args, { ...rest, env: await guardedEnv(opts.cwd) });
+  // EPIPE means git exited before reading all of the input; its exit code and stderr reach the caller
+  // through `pending`. Any other write error is kept and thrown once git has finished.
+  let writeError: Error | undefined;
+  if (input !== undefined) {
+    pending.child.stdin?.on('error', (err: NodeJS.ErrnoException) => {
+      if (err.code !== 'EPIPE') writeError = err;
+    });
+    pending.child.stdin?.end(input);
+  }
+  let result;
+  try {
+    result = await pending;
+  } catch (err) {
+    // git failed too: its error is the one the caller reads, with the stdin error kept as its cause.
+    if (writeError) (err as Error).cause ??= writeError;
+    throw err;
+  }
+  if (writeError) throw writeError;
+  return result;
+};
 
 export class GitError extends Error {}
 
@@ -104,9 +125,9 @@ export async function git(cwd: string, args: string[], stage: string): Promise<s
  * Runs git for a check where one kind of failure is an answer: null when `answer` accepts the exit
  * code and stderr. Any other failure throws with git's reason.
  */
-async function check(cwd: string, args: string[], what: string, answer: (code: number, stderr: string) => boolean): Promise<string | null> {
+async function check(cwd: string, args: string[], what: string, answer: (code: number, stderr: string) => boolean, input?: string): Promise<string | null> {
   try {
-    return (await run('git', args, { cwd })).stdout;
+    return (await run('git', args, { cwd, maxBuffer: 16 * 1024 * 1024, input })).stdout;
   } catch (err) {
     const e = err as NodeJS.ErrnoException & { stderr?: string; code?: number | string };
     if (typeof e.code === 'number' && answer(e.code, e.stderr ?? '')) return null;
@@ -152,6 +173,14 @@ export async function isTracked(repo: string, file: string): Promise<boolean> {
 export async function isIgnored(repo: string, file: string): Promise<boolean> {
   // `check-ignore -q` exits 1 when the file is not ignored; anything else is a real failure.
   return (await check(repo, ['check-ignore', '-q', '--', file], 'the ignore rules', (code) => code === 1)) !== null;
+}
+
+/** Which of `paths` (relative to `repo`) git ignores by any rule: nested .gitignore, info/exclude or the global excludes file. One git call. */
+export async function ignoredPaths(repo: string, paths: string[], stage: string): Promise<Set<string>> {
+  if (paths.length === 0) return new Set();
+  // `check-ignore` exits 1 when none of the paths is ignored; anything else is a real failure.
+  const out = await check(repo, ['check-ignore', '--stdin', '-z'], `the ignore rules for ${stage}`, (code) => code === 1, paths.join('\0') + '\0');
+  return new Set(out ? out.split('\0').filter(Boolean) : []);
 }
 
 /** Whether commit `a` is already part of `b`'s history. */

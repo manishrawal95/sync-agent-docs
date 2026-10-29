@@ -12,7 +12,7 @@ Node 24. The scan writes only inside `<path>/.sync-agent-docs/`, which holds its
 
 | Where | Reads | Never reads |
 |---|---|---|
-| Repos: every folder with a `.git` under the path you give | Markdown files (agent files, READMEs, docs; not `CHANGELOG.md` or `HISTORY.md`), `.cursor/rules/*`, `package.json`, `wrangler.*`, `vercel.json`, `.vercel/project.json`, pm2 `ecosystem.config.*`, `compose*.yml`, `fly.toml`, `Procfile`, `.env*`, git remote URLs | Files git ignores (except `.env*` and `.vercel/`), `node_modules`, `.venv`, `venv`, `dist`, `build`, `.next`, `.worktrees`, test fixture folders, binary files, files over 512 KB |
+| Repos: every folder with a `.git` under the path you give | Markdown files (agent files, READMEs, docs; not `CHANGELOG.md` or `HISTORY.md`), `.cursor/rules/*`, `package.json`, `wrangler.*`, `vercel.json`, `.vercel/project.json`, pm2 `ecosystem.config.*`, `compose*.yml`, `fly.toml`, `Procfile`, `.env*`, `.github/workflows/*.yml` (secret names only, `secrets.NAME`, never values), git remote URLs | Files git ignores by any rule (nested `.gitignore`, `.git/info/exclude`, your global excludes; a folder without git uses its root `.gitignore`), except `.env*` and `.vercel/`; `node_modules`, `.venv`, `venv`, `dist`, `build`, `.next`, `.worktrees`, test fixture folders, binary files, files over 512 KB |
 | `.env*` files | Variable names: each line is cut at `=` as it is read | Values. They are dropped before the line is kept, so no secret value reaches the report, a log or an error |
 | Your home folder (`--repos-only` skips all of it) | `~/.claude/CLAUDE.md` and Claude memory files, `~/.codex/AGENTS.md`, `~/.gemini/GEMINI.md`, `~/.cursor/rules/*`, `~/.ssh/config`, `~/.gitconfig` (paths only), `~/.config/gh/hosts.yml` (host names only), `~/.zshrc`, `~/.bashrc` and `~/.profile` (variable names only), LaunchAgents and systemd user units (paths and names only), `crontab -l` | SSH keys, the token lines in `gh/hosts.yml`, the values in shell rc files, and every other file in your home folder |
 | Programs it runs | `git` (remote URLs, branches, commits), `crontab -l` | Anything else. `plan --ai` runs your `claude` command only after you say yes, with its tools off |
@@ -84,7 +84,7 @@ A secret is never copied into a commit, a patch, the plan or the store. `apply` 
 
 ## Doctor
 
-`doctor` reruns every check against the store and reports drift. It changes nothing: the only file it writes is `.sync-agent-docs/doctor.json`, the result of its last run. It exits 0 when there is no drift, 1 when there is, and 2 when doctor itself could not run (no store, a bad `checks.json`, a repo git cannot read), with the file and the next step in the message.
+`doctor` reruns every check against the store and reports drift. It changes nothing: the only file it writes is `.sync-agent-docs/doctor.json`, the result of its last run (and `.sync-agent-docs/.gitignore` when it is missing or changed). It exits 0 when there is no drift, 1 when there is, and 2 when doctor itself could not run (no store, a bad `checks.json`, a repo git cannot read), with the file and the next step in the message.
 
 | Check | Drift when |
 |---|---|
@@ -98,7 +98,7 @@ A secret is never copied into a commit, a patch, the plan or the store. `apply` 
 | `secrets` | a secret you chose to rotate by hand is still on its recorded line. Only the path and line are shown. |
 | `live` | with `--live` only: a recorded target times out, refuses the connection or answers 5xx. |
 
-Options: `--store <path>` (the store, as for `compile`), `--repos-only` (passed to the rescan), `--json` (print the result below instead of the report) and `--live`.
+Options: `--store <path>` (the store, as for `compile`), `--repos-only` (passed to the rescan; machine-file facts are counted in one note, not checked), `--json` (print the result below instead of the report) and `--live`.
 
 ### checks.json
 

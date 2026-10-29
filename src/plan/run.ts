@@ -107,11 +107,14 @@ async function aiPass(plan: Plan, decisions: Decision[], opts: PlanOptions & { a
   return items;
 }
 
+/** An answer in the last plan.json, and who gave it there. */
+type TypedAnswer = { answer: string; by: PlanItem['answeredBy'] };
+
 /**
  * Answers typed into the last plan.json by hand, by item key, so planning again keeps them. A
  * plan.json that cannot be read is noted, not fatal: plan writes a fresh one.
  */
-async function handAnswers(root: string, note: ((t: string) => void) | undefined): Promise<Map<string, string>> {
+async function handAnswers(root: string, note: ((t: string) => void) | undefined): Promise<Map<string, TypedAnswer>> {
   const path = join(root, '.sync-agent-docs', 'plan.json');
   let last: Plan | null;
   try {
@@ -120,8 +123,8 @@ async function handAnswers(root: string, note: ((t: string) => void) | undefined
     note?.(printable(`${(err as Error).message} Answers typed into it were not carried over; plan writes a new one.`));
     return new Map();
   }
-  const out = new Map<string, string>();
-  for (const i of last?.items ?? []) if (i.answer !== null && i.answeredBy !== 'remembered') out.set(i.key, i.answer);
+  const out = new Map<string, TypedAnswer>();
+  for (const i of last?.items ?? []) if (i.answer !== null) out.set(i.key, { answer: i.answer, by: i.answeredBy });
   return out;
 }
 
@@ -142,8 +145,12 @@ export async function runPlan(root: string, opts: PlanOptions): Promise<Plan> {
   if (opts.ai) plan.items.push(...(await aiPass(plan, decisions, { ...opts, ai: opts.ai }, show)));
   const typed = await handAnswers(root, opts.note);
   for (const i of plan.items) {
-    const answer = typed.get(i.key);
-    if (i.answer === null && answer !== undefined && i.options.includes(answer)) Object.assign(i, { answer, answeredBy: 'hand' });
+    const last = typed.get(i.key);
+    if (!last || last.answer === i.answer || !i.options.includes(last.answer)) continue;
+    // An earlier remembered answer is stale when nothing settles the item now. Any other earlier
+    // answer that differs from a settled item's is a hand edit: plan.json is the edit surface.
+    if (i.answer === null && last.by === 'remembered') continue;
+    Object.assign(i, { answer: last.answer, answeredBy: 'hand' });
   }
   const made = [];
   if (opts.acceptAuto) {

@@ -260,7 +260,8 @@ async function moveItems(ctx: Ctx): Promise<PlanItem[]> {
           notes.push(`${ctx.display(fact.at.path)}:${fact.at.line} kept until compile.`);
         }
       }
-      items.push(item('move', 'duplicate', `${f.entityId ?? 'none'}|${f.attribute}`, [group.value], {
+      const lineHashes = sortedSet(await Promise.all(facts.map(async (x) => lineHash((await ctx.lineOf(x.at.path, x.at.line)) ?? x.lineText))));
+      items.push(item('move', 'duplicate', `${f.entityId ?? 'none'}|${f.attribute}`, [group.value, ...lineHashes], {
         title: `${names[0] ?? f.attribute} ${f.attribute} ${group.value} is repeated in ${facts.length} agent files`,
         ...(f.entityId ? { entityId: f.entityId } : {}), attribute: f.attribute, evidence: await ctx.evidence(facts),
         options: ['approve', 'skip'], recommended: 'approve', edits: edits.length ? { approve: edits } : {}, notes,
@@ -272,7 +273,8 @@ async function moveItems(ctx: Ctx): Promise<PlanItem[]> {
       // Stale lines in README and docs stay: people read those, and the plan only cleans agent context.
       if (!fact?.agent) continue;
       const e = await ctx.edit(fact);
-      items.push(item('move', 'stale', ctx.display(fact.at.path), [group.value], {
+      const text = (await ctx.lineOf(fact.at.path, fact.at.line)) ?? fact.lineText;
+      items.push(item('move', 'stale', ctx.display(fact.at.path), [group.value, lineHash(text)], {
         title: `${ctx.display(fact.at.path)}:${fact.at.line} names ${group.value}, which nothing on the machine backs`,
         attribute: f.attribute, evidence: await ctx.evidence([fact]), options: ['delete', 'keep'], recommended: 'delete',
         edits: e ? { delete: [e] } : {}, notes: [],

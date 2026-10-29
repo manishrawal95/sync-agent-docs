@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { findRepos } from '../src/discover/repos.js';
 import { classifySources } from '../src/discover/sources.js';
 import { parseTruth, withoutCredentials } from '../src/truth/parse.js';
+import { portsInDocLine } from '../src/truth/parsed.js';
 import type { TruthResult } from '../src/types.js';
 import { materializeFixture } from './helpers/fixture.js';
 
@@ -185,5 +186,27 @@ describe('truth', () => {
     await writeFile(join(root, 'broken', '.git'), 'gitdir: /nonexistent\n');
     const truth = await truthOf(root);
     expect(truth.skipped.filter((s) => s.note?.startsWith('git remote'))).toEqual([{ path: join(root, 'broken'), reason: 'unreadable', note: expect.stringMatching(/^git remote/) }]);
+  });
+
+  it('ps, lsof, kill, pgrep, ssh and mkdir -p are not ports', () => {
+    for (const line of ['Check with `ps -p 48213`', 'lsof -p 4000', 'kill -p 4000', 'pgrep -p 4000', 'ssh -p 2222 host', 'mkdir -p 4000']) {
+      expect(portsInDocLine(line), line).toEqual([]);
+    }
+  });
+
+  it('-p after a dev server command is a port', () => {
+    expect(portsInDocLine('next dev -p 3000')).toEqual(['3000']);
+    expect(portsInDocLine('PORT=1 npx vite -p 5173')).toContain('5173');
+    expect(portsInDocLine('npm run dev -- -p 3001')).toEqual(['3001']);
+  });
+
+  it('--port and PORT= count after any command', () => {
+    expect(portsInDocLine('ps --port 4000')).toEqual(['4000']);
+    expect(portsInDocLine('PORT=8080 node x.js')).toEqual(['8080']);
+  });
+
+  it('each segment of a line is judged on its own command', () => {
+    expect(portsInDocLine('`ps -p 1` then `next dev -p 3000`')).toEqual(['3000']);
+    expect(portsInDocLine('ps -p 1 && next start -p 3000')).toEqual(['3000']);
   });
 });

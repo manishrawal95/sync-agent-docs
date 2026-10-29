@@ -4,7 +4,7 @@ import { promisify } from 'node:util';
 import { readTextSafe } from '../discover/sources.js';
 import type { Entity, Fact, RepoInfo, SkippedFile, SourceFile, SourceFormat, TruthResult } from '../types.js';
 import { parseCompose } from './formats/compose.js';
-import { parseGhHosts, parseGitConfig, parseLaunchAgent } from './formats/corpus-only.js';
+import { parseGhHosts, parseGithubWorkflow, parseGitConfig, parseLaunchAgent } from './formats/corpus-only.js';
 import { parseEnvNames } from './formats/env.js';
 import { parseFly } from './formats/fly.js';
 import { parsePackageJson } from './formats/package-json.js';
@@ -27,6 +27,7 @@ const PARSERS: Partial<Record<SourceFormat, FormatParser>> = {
   procfile: parseProcfile,
   'ssh-config': parseSshConfig,
   'launch-agent': parseLaunchAgent,
+  'github-workflow': parseGithubWorkflow,
 };
 
 /** Formats whose files hold secrets: streamed line by line, never read whole. */

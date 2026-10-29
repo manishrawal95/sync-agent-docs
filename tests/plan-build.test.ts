@@ -1,4 +1,4 @@
-import { appendFile, mkdir, rename, symlink, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, readFile, rename, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { buildPlan } from '../src/plan/build.js';
@@ -103,6 +103,41 @@ describe('buildPlan', () => {
     expect(item.options).toEqual(['delete', 'keep']);
     expect(item.recommended).toBe('delete');
     expect(item.edits.delete).toEqual([expect.objectContaining({ path: join(root, 'shop', 'CLAUDE.md'), line: 5, op: 'remove' })]);
+  });
+
+  describe('remembered line deletes', () => {
+    const rewriteLine = async (root: string, from: string, to: string) => {
+      const file = join(root, 'shop', 'CLAUDE.md');
+      await writeFile(file, (await readFile(file, 'utf8')).replace(from, to));
+    };
+    const remember = (i: PlanItem): Decision => ({ key: i.key, kind: i.kind, subject: i.subject, candidates: i.candidates, answer: 'delete', decidedAt: NOW.toISOString() });
+    const replan = async (fx: Awaited<ReturnType<typeof setup>>, decisions: Decision[]) => {
+      const scan = await collectScan(fx.root, { home: fx.home, reposOnly: false, crontabCommand: 'false' });
+      return buildPlan({ scan, decisions, store: join(fx.home, 'dev', 'truth'), home: fx.home, now: NOW });
+    };
+
+    it('a remembered stale delete does not apply to a new line with the same value', async () => {
+      const fx = await setup();
+      const decision = remember(one(await fx.plan(), (i) => i.kind === 'stale'));
+      await rewriteLine(fx.root, 'old staging box 10.0.0.4', 'retired staging box 10.0.0.4');
+      expect(one(await replan(fx, [decision]), (i) => i.kind === 'stale').answer).toBeNull();
+    });
+
+    it('a remembered duplicate delete does not apply when the duplicated line changes', async () => {
+      const fx = await setup();
+      const first = one(await fx.plan(), (i) => i.kind === 'duplicate');
+      const decision = { ...remember(first), answer: 'approve' };
+      await rewriteLine(fx.root, 'hetzner box: 100.64.1.10', 'hetzner box (primary): 100.64.1.10');
+      expect(one(await replan(fx, [decision]), (i) => i.kind === 'duplicate').answer).toBeNull();
+    });
+
+    it('an unchanged line keeps its remembered stale answer', async () => {
+      const fx = await setup();
+      const decision = remember(one(await fx.plan(), (i) => i.kind === 'stale'));
+      const item = one(await replan(fx, [decision]), (i) => i.kind === 'stale');
+      expect(item.answer).toBe('delete');
+      expect(item.answeredBy).toBe('remembered');
+    });
   });
 
   it('secret item carries no line text and no secret', async () => {
