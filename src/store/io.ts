@@ -4,6 +4,7 @@ import { writeFresh } from '../dotdir.js';
 import { AGENT_FORMATS } from '../types.js';
 import { insideStore } from './inside.js';
 import { SCHEMA_VERSION, type Decision, type Store, type StoreEntity, type StoreFact, type StoreSecret, type TruthConfig } from './types.js';
+import { codeOf, nextStep } from '../paths.js';
 
 /** Reads a schema-versioned JSON file; null when it does not exist. */
 export async function readJsonFile<T>(path: string, stage: string): Promise<T | null> {
@@ -12,7 +13,7 @@ export async function readJsonFile<T>(path: string, stage: string): Promise<T | 
     text = await readFile(path, 'utf8');
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    throw new Error(`${stage}: could not read ${path} (${(err as NodeJS.ErrnoException).code ?? (err as Error).message}). Check its permissions.`, { cause: err });
+    throw new Error(`${stage}: could not read ${path} (${codeOf(err)}). ${nextStep(err)}`, { cause: err });
   }
   let value: unknown;
   try {

@@ -5,6 +5,7 @@ import { promisify } from 'node:util';
 import { CURSOR_RULE } from './sources.js';
 import { corpusTokens } from '../truth/formats/corpus-only.js';
 import type { AgentFormat, SkippedFile, SourceFile, SourceFormat, SourceKind } from '../types.js';
+import { codeOf, nextStep } from '../paths.js';
 
 const run = promisify(execFile);
 
@@ -40,7 +41,7 @@ async function list(dir: string, pattern: RegExp, opts: ListOptions = {}, nested
       opts.deep.push({ path: dir, reason: 'unreadable', note: `${code}: this subfolder could not be listed, so rules inside it were not read. Fix its permissions to include them` });
       return [];
     }
-    throw new Error(`machine pass: could not list ${dir} (${(err as Error).message}). Check its permissions or pass --repos-only.`, { cause: err });
+    throw new Error(`machine pass: could not list ${dir} (${codeOf(err)}). ${nextStep(err)} Or pass --repos-only.`, { cause: err });
   }
 }
 

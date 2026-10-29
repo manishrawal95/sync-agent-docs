@@ -2,6 +2,7 @@ import { access, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentFormat, Attribute, Fact, Finding, FindingType, Location, RepoInfo, SkippedFile, ValueGroup } from '../types.js';
+import { codeOf, nextStep } from '../paths.js';
 
 export interface FindingsInput {
   facts: Fact[];
@@ -103,7 +104,7 @@ async function hasLocalTop(path: string, home: string): Promise<boolean> {
   if (!top || rest.length === 0) return false;
   return stat(join(home, top)).then((s) => s.isDirectory(), (err: NodeJS.ErrnoException) => {
     if (err.code === 'ENOENT' || err.code === 'ENOTDIR') return false;
-    throw new Error(`scan: could not check ${join(home, top)} (${err.code ?? err.message}). Check its permissions.`, { cause: err });
+    throw new Error(`scan: could not check ${join(home, top)} (${codeOf(err)}). ${nextStep(err)}`, { cause: err });
   });
 }
 

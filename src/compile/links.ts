@@ -1,6 +1,6 @@
 import { lstat } from 'node:fs/promises';
 import { basename, dirname, join, relative, sep } from 'node:path';
-import { inside, resolveReal } from '../paths.js';
+import { codeOf, inside, nextStep, resolveReal } from '../paths.js';
 import { COMPILED_FILES } from './formats/index.js';
 
 /** Where a link that must not be written through leads: `target` is relative to the repo when inside it. */
@@ -13,7 +13,7 @@ async function repoTop(dir: string, stage: string): Promise<string | null> {
       () => true,
       (err: NodeJS.ErrnoException) => {
         if (err.code === 'ENOENT' || err.code === 'ENOTDIR') return false;
-        throw new Error(`${stage}: could not check ${join(at, '.git')} (${err.code ?? err.message}). Check its permissions.`, { cause: err });
+        throw new Error(`${stage}: could not check ${join(at, '.git')} (${codeOf(err)}). ${nextStep(err)}`, { cause: err });
       },
     );
     if (found) return at;

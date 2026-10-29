@@ -2,7 +2,7 @@ import { readFile, realpath, stat } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { importLines } from '../../compile/content.js';
 import { COMPILED_FILES } from '../../compile/formats/index.js';
-import { codeOf, inside, NOT_THERE, shortPath } from '../../paths.js';
+import { codeOf, inside, nextStep, NOT_THERE, shortPath } from '../../paths.js';
 import type { Check, Found } from '../types.js';
 import { listedRepos } from './repos.js';
 
@@ -30,7 +30,7 @@ async function fileId(path: string, real: string): Promise<string | null> {
     return info.isFile() ? `${info.dev}:${info.ino}` : null;
   } catch (err) {
     if (NOT_THERE.has((err as NodeJS.ErrnoException).code ?? '')) return null;
-    throw new Error(`doctor: could not check ${path} (${codeOf(err)}). Check its permissions.`, { cause: err });
+    throw new Error(`doctor: could not check ${path} (${codeOf(err)}). ${nextStep(err)}`, { cause: err });
   }
 }
 
@@ -50,7 +50,7 @@ export async function loadedSize(
     bytes = (await stat(real)).size;
     if (opts.claude) text = await readFile(real, 'utf8');
   } catch (err) {
-    throw new Error(`doctor: could not read ${path} (${codeOf(err)}). Check its permissions.`, { cause: err });
+    throw new Error(`doctor: could not read ${path} (${codeOf(err)}). ${nextStep(err)}`, { cause: err });
   }
   const sizes = new Map<string, number>();
   for (const ref of importLines(text)) {
@@ -62,7 +62,7 @@ export async function loadedSize(
       if (info.isFile()) sizes.set(importReal, info.size);
     } catch (err) {
       if (SKIPPED.has((err as NodeJS.ErrnoException).code ?? '')) continue;
-      throw new Error(`doctor: could not check ${target}, imported by ${path} (${codeOf(err)}). Check its permissions.`, { cause: err });
+      throw new Error(`doctor: could not check ${target}, imported by ${path} (${codeOf(err)}). ${nextStep(err)}`, { cause: err });
     }
   }
   const imports = [...sizes.keys()].sort();
@@ -85,7 +85,7 @@ export const loadedSizeCheck: Check = {
           real = await realpath(path);
         } catch (err) {
           if (NOT_THERE.has((err as NodeJS.ErrnoException).code ?? '')) continue;
-          throw new Error(`doctor: could not check ${path} (${codeOf(err)}). Check its permissions.`, { cause: err });
+          throw new Error(`doctor: could not check ${path} (${codeOf(err)}). ${nextStep(err)}`, { cause: err });
         }
         if (!inside(real, repoReal)) continue;
         const id = await fileId(path, real);

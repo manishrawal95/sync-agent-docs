@@ -230,3 +230,25 @@ describe('doctor: an agent path that is not a readable file', () => {
     expect(check(await doctor(), 'compiled').findings.filter((f) => f.key.startsWith('compiled:shop/CLAUDE.md:edited'))).toEqual([]);
   });
 });
+
+describe('doctor: a file where an agent file\'s folder would be', () => {
+  it('a file named .github is no folder for Copilot, so doctor runs and finds no drift', async () => {
+    const { root, doctor } = await applied({ answerAll: true });
+    await writeFile(join(root, 'shop', '.github'), 'not a folder\n');
+    const r = await doctor();
+    expect(r.checks.filter((c) => c.status === 'drift')).toEqual([]);
+  });
+});
+
+describe('doctor: a repo that is a link loop', () => {
+  it('names the loop instead of reporting the repo as not there', async () => {
+    const { root, doctor } = await applied({ answerAll: true });
+    await rm(join(root, 'shop'), { recursive: true, force: true });
+    await symlink(join(root, 'shop-loop'), join(root, 'shop'));
+    await symlink(join(root, 'shop'), join(root, 'shop-loop'));
+    const out = await doctor().then((r) => renderDoctor(r), (e: Error) => e.message);
+    expect(out).toContain('ELOOP');
+    expect(out).toContain('A link in the path leads back to itself');
+    expect(out).not.toContain('is listed in sync-agent-docs.json but is not there');
+  });
+});

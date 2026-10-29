@@ -3,13 +3,14 @@ import { join } from 'node:path';
 import { renderViews } from '../../apply/run.js';
 import { detectViewEdits } from '../../views/edits.js';
 import type { Check, Found } from '../types.js';
+import { codeOf, nextStep } from '../../paths.js';
 
 async function readOrNull(path: string): Promise<string | null> {
   try {
     return await readFile(path, 'utf8');
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    throw new Error(`doctor: could not read ${path} (${(err as NodeJS.ErrnoException).code ?? (err as Error).message}). Check its permissions.`, { cause: err });
+    throw new Error(`doctor: could not read ${path} (${codeOf(err)}). ${nextStep(err)}`, { cause: err });
   }
 }
 

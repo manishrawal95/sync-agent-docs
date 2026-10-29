@@ -13,6 +13,7 @@ import { renderDoctor, runDoctor } from './doctor/run.js';
 import type { Asker } from './plan/prompt.js';
 import { renderPlanSummary, runPlan } from './plan/run.js';
 import { jsonText, printable, renderTerminal } from './report/terminal.js';
+import { codeOf, nextStep } from './paths.js';
 import { assertFolder, NotAFolderError, runScan } from './scan.js';
 
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
@@ -29,6 +30,22 @@ async function folderArg(path: string | undefined): Promise<string> {
  * --json output goes through jsonText, which escapes them, and the scan report is made printable as it is drawn, with its own colors.
  */
 const say = (stream: NodeJS.WriteStream, text: string): void => void stream.write(`${printable(text)}\n`);
+
+let resolvedHome: Promise<string> | undefined;
+
+/**
+ * The home folder resolved through links, so paths found under it compare equal to the real paths the scan records. Resolved once.
+ * A home that cannot be resolved is used as given; a failure other than a missing folder is named on stderr.
+ */
+function home(): Promise<string> {
+  resolvedHome ??= realpath(homedir()).catch((err: unknown) => {
+    if (codeOf(err) !== 'ENOENT') {
+      say(process.stderr, `sync-agent-docs: could not resolve your home folder ${homedir()} (${codeOf(err)}); using it as given. ${nextStep(err)}`);
+    }
+    return homedir();
+  });
+  return resolvedHome;
+}
 
 /** One error line on stderr: a bad path is stated as is, anything else as the command failing, with a leading stage name in the message (`plan --ai: …`) said once. */
 function fail(command: string, err: unknown, exitCode = 1): void {
@@ -57,7 +74,7 @@ program
   .action(async (path: string | undefined, opts: { reposOnly?: boolean; json?: boolean }) => {
     try {
       const root = await folderArg(path);
-      const result = await runScan(root, { home: homedir(), reposOnly: opts.reposOnly === true });
+      const result = await runScan(root, { home: await home(), reposOnly: opts.reposOnly === true });
       process.stdout.write(opts.json ? `${jsonText(result)}\n` : `${renderTerminal(result, { color: process.stdout.isTTY && !process.env.NO_COLOR })}\n`);
     } catch (err) {
       fail('scan', err);
@@ -80,7 +97,7 @@ program
     try {
       const root = await folderArg(path);
       const plan = await runPlan(root, {
-        home: homedir(), reposOnly: opts.reposOnly === true, useScan: opts.useScan === true, acceptAuto: opts.acceptAuto === true,
+        home: await home(), reposOnly: opts.reposOnly === true, useScan: opts.useScan === true, acceptAuto: opts.acceptAuto === true,
         ...(opts.store ? { store: resolve(opts.store) } : {}), ...(asker ? { asker } : {}),
         ...(opts.ai ? { ai: { path: process.env.PATH ?? '' }, note: (t: string) => say(process.stderr, t) } : {}),
       });
@@ -99,7 +116,7 @@ program
   .action(async (path: string | undefined) => {
     try {
       const root = await folderArg(path);
-      const entry = await runApply(root, { home: homedir() });
+      const entry = await runApply(root, { home: await home() });
       say(process.stdout, renderApplySummary(entry));
     } catch (err) {
       fail('apply', err);
@@ -126,7 +143,7 @@ program
     try {
       const root = await folderArg(path);
       const store = opts.store ? resolve(opts.store) : undefined;
-      say(process.stdout, renderCompileSummary(await runCompile(root, { home: homedir(), store })));
+      say(process.stdout, renderCompileSummary(await runCompile(root, { home: await home(), store })));
     } catch (err) {
       fail('compile', err);
     }
@@ -145,7 +162,7 @@ program
     try {
       const root = await folderArg(path);
       const result = await runDoctor(root, {
-        home: homedir(), store: opts.store ? resolve(opts.store) : undefined, reposOnly: opts.reposOnly === true, live: opts.live === true,
+        home: await home(), store: opts.store ? resolve(opts.store) : undefined, reposOnly: opts.reposOnly === true, live: opts.live === true,
         onLiveTargets: (targets) => say(process.stderr, renderLiveTargets(targets)),
       });
       if (opts.json) process.stdout.write(`${jsonText(result)}\n`);

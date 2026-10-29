@@ -2,7 +2,9 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
 import { createServer as createTcpServer, type AddressInfo, type Socket } from 'node:net';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { EventEmitter } from 'node:events';
+import https from 'node:https';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { liveTargets } from '../src/doctor/live.js';
 import { CHECK_IDS, type LiveTarget } from '../src/doctor/types.js';
 import type { StoreEntity, StoreFact } from '../src/store/types.js';
@@ -12,6 +14,7 @@ interface Seen { method: string; url: string; headers: IncomingHttpHeaders; body
 const closers: (() => Promise<unknown>)[] = [];
 const closing = (server: Server | ReturnType<typeof createTcpServer>) => () => new Promise((r) => server.close(r));
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (const close of closers.splice(0)) await close();
 });
 
@@ -231,4 +234,39 @@ describe('doctor --live', () => {
     expect(Date.now() - started).toBeLessThan(900);
     expect(r.live?.[0]).toMatchObject({ result: 'failed', detail: expect.stringContaining('timed out') });
   }, 10_000);
+
+  describe('a certificate that cannot be verified', () => {
+    const publicName = async () => [{ address: '93.184.216.34', family: 4 }];
+    /** https.request stubbed to fail like a TLS handshake, so no real network is touched. */
+    const failWith = (code: string) =>
+      vi.spyOn(https, 'request').mockImplementation((() => {
+        const req = Object.assign(new EventEmitter(), { destroy: () => undefined, end: () => void setImmediate(() => req.emit('error', Object.assign(new Error('tls'), { code }))) });
+        return req;
+      }) as unknown as typeof https.request);
+
+    it('on a host marked local is a note, not a host that is down', async () => {
+      failWith('DEPTH_ZERO_SELF_SIGNED_CERT');
+      const { doctor } = await setup([entity('host:lab', 'local')], [fact('host:lab', 'url', 'https://example.com/')]);
+      const r = await doctor({ live: true, resolve: publicName });
+      const c = check(r, 'live');
+      expect(c.status).toBe('clean');
+      expect(c.findings).toEqual([expect.objectContaining({ level: 'note', message: 'https://example.com/ (host:lab): answered, but its certificate could not be verified (DEPTH_ZERO_SELF_SIGNED_CERT).' })]);
+      expect(c.findings[0]?.message).not.toContain('--use-system-ca');
+    });
+
+    it('on an unmarked host is drift that says to renew it', async () => {
+      failWith('DEPTH_ZERO_SELF_SIGNED_CERT');
+      const { doctor } = await setup([entity('host:web')], [fact('host:web', 'url', 'https://example.com/')]);
+      const c = check(await doctor({ live: true, resolve: publicName }), 'live');
+      expect(c.status).toBe('drift');
+      expect(c.findings.map((f) => f.message)).toEqual(['https://example.com/ (host:web): its certificate is not valid (DEPTH_ZERO_SELF_SIGNED_CERT); renew it or fix the store if it moved.']);
+      expect(c.findings[0]?.message).not.toContain('--use-system-ca');
+    });
+
+    it('does not turn a refused connection on a marked host into a note', async () => {
+      const closed = await closedPort();
+      const { doctor } = await setup([entity('host:lab', 'local')], [fact('host:lab', 'ip', '127.0.0.1'), fact('host:lab', 'port', String(closed))]);
+      expect(check(await doctor({ live: true }), 'live').status).toBe('drift');
+    });
+  });
 });

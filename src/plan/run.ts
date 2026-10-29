@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { aiPrompt, aiQuestions, aiSubject, detectAgentCli, runsWithToolsOff } from '../ai/pass.js';
 import { openDotDir, refuseTrackedDotDir } from '../dotdir.js';
 import { withLock } from '../lock.js';
-import { checkStorePath, resolveReal, shortPath } from '../paths.js';
+import { checkStorePath, codeOf, nextStep, resolveReal, shortPath } from '../paths.js';
 import { runScan, type ScanOptions } from '../scan.js';
 import { readJsonFile, readStore, writeJsonAtomic } from '../store/io.js';
 import type { Decision } from '../store/types.js';
@@ -51,7 +51,7 @@ async function latestScan(root: string): Promise<ScanResult> {
     text = await readFile(path, 'utf8');
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') throw new Error(`plan: ${path} does not exist. Run sync-agent-docs scan first, or drop --use-scan.`, { cause: err });
-    throw new Error(`plan: could not read ${path} (${(err as NodeJS.ErrnoException).code ?? (err as Error).message}). Check its permissions.`, { cause: err });
+    throw new Error(`plan: could not read ${path} (${codeOf(err)}). ${nextStep(err)}`, { cause: err });
   }
   let scan: ScanResult;
   try {

@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { lineHasSecret } from '../../claims/secrets.js';
 import { storePath } from '../../compile/deps.js';
 import type { Check, Found } from '../types.js';
+import { codeOf, nextStep } from '../../paths.js';
 
 // How far edits may move a secret before a secret-looking line is taken to be a different one.
 const WINDOW = 20;
@@ -33,7 +34,7 @@ export const secretsCheck: Check = {
       try {
         text = await readFile(file, 'utf8');
       } catch (err) {
-        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error(`doctor: could not read ${file} to check the secret at line ${s.line} (${(err as NodeJS.ErrnoException).code ?? (err as Error).message}). Check its permissions.`, { cause: err });
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error(`doctor: could not read ${file} to check the secret at line ${s.line} (${codeOf(err)}). ${nextStep(err)}`, { cause: err });
         out.push({ key: `secrets:${at}`, level: 'note', path: s.path, message: `${s.path} is gone, so the secret recorded at ${at} is no longer there. Rotate it if you have not.` });
         continue;
       }

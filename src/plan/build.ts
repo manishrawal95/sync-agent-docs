@@ -286,6 +286,7 @@ async function moveItems(ctx: Ctx): Promise<PlanItem[]> {
 
 async function secretItems(ctx: Ctx): Promise<PlanItem[]> {
   const items: PlanItem[] = [];
+  const copies = new Map<string, number>();
   for (const f of ctx.scan.findings) {
     const at = f.type === 'secret' ? f.at?.[0] : undefined;
     if (!at) continue;
@@ -293,7 +294,10 @@ async function secretItems(ctx: Ctx): Promise<PlanItem[]> {
     if (text === undefined) continue;
     const hash = lineHash(text);
     const shown = ctx.display(at.path);
-    items.push(item('secret', 'secret', shown, [hash], {
+    // Identical lines in one file share a hash, so the nth copy is keyed apart by its number.
+    const copy = (copies.get(`${at.path}\0${hash}`) ?? 0) + 1;
+    copies.set(`${at.path}\0${hash}`, copy);
+    items.push(item('secret', 'secret', shown, copy > 1 ? [hash, `#${copy}`] : [hash], {
       title: `Possible secret at ${shown}:${at.line}`, evidence: [], options: ['rotate-remove', 'false-positive'],
       edits: { 'rotate-remove': [{ path: at.path, line: at.line, op: 'remove', lineHash: hash, secret: true }] },
       notes: ['rotate-remove: rotate the credential first, then apply removes the line. false-positive: it is kept and not asked again.'],
@@ -352,10 +356,15 @@ export async function buildPlan(input: BuildInput): Promise<Plan> {
   const items = all.filter((i) => !seen.has(i.key) && seen.add(i.key)).sort((a, b) => TIERS.indexOf(a.tier) - TIERS.indexOf(b.tier));
   await dropLinkedEdits(items, input.scan.root, input.home);
   const remembered = new Map(input.decisions.map((d) => [d.key, d]));
+  // Copies of one secret line are keyed by their number, so removing one renumbers the rest: an answer
+  // that edits the file, remembered for a line that is or was repeated, could land on the wrong copy.
+  const copied = (x: Pick<PlanItem, 'kind' | 'subject' | 'candidates'>): string => `${x.subject}\0${x.candidates[0] ?? ''}`;
+  const repeated = new Set([...items, ...input.decisions].filter((x) => x.kind === 'secret' && x.candidates.length > 1).map(copied));
   for (const i of items) {
     const d = remembered.get(i.key);
     // A secret is waved through only by a decision made for this exact line, not one that merely carries its key.
     if (i.tier === 'secret' && d && decisionKey(d.kind, d.subject, d.candidates) !== i.key) continue;
+    if (i.tier === 'secret' && d && i.edits[d.answer]?.length && repeated.has(copied(i))) continue;
     if (d && i.options.includes(d.answer)) Object.assign(i, { answer: d.answer, answeredBy: 'remembered' });
   }
   return {

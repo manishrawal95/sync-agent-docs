@@ -23,11 +23,20 @@ export interface Parsed {
 /** Reads the text of one config file. Throws on malformed input; parseTruth turns that into a skip note. */
 export type FormatParser = (text: string) => Parsed;
 
-/** 1-based number of the first line containing needle at or after line `from`; 1 when absent. */
-export function lineOf(text: string, needle: string, from = 1): number {
+/** Escapes text from a scanned file so it matches itself inside a RegExp. */
+export function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * 1-based number of the first line matching needle at or after line `from`; `from` when none does.
+ * A string matches only as a whole token (no `[A-Za-z0-9_.-]` on either side), so `80` skips `8080`.
+ */
+export function lineOf(text: string, needle: string | RegExp, from = 1): number {
+  const pattern = typeof needle === 'string' ? new RegExp(`(?<![A-Za-z0-9_.-])${escapeRegExp(needle)}(?![A-Za-z0-9_.-])`) : needle;
   const lines = text.split('\n');
-  for (let i = from - 1; i < lines.length; i++) if (lines[i]?.includes(needle)) return i + 1;
-  return 1;
+  for (let i = from - 1; i < lines.length; i++) if (pattern.test(lines[i] ?? '')) return i + 1;
+  return from;
 }
 
 /** 1-based line number of a character offset. */

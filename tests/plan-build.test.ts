@@ -154,6 +154,75 @@ describe('buildPlan', () => {
     expect(JSON.stringify(p)).not.toContain(secret);
   });
 
+  describe('identical secret lines', () => {
+    const copyAt40 = async (root: string) => {
+      const path = join(root, 'shop', 'AGENTS.md');
+      const lines = (await readFile(path, 'utf8')).split('\n');
+      const filler = Array.from({ length: 36 }, (_, n) => `Note ${n + 1}`);
+      await writeFile(path, [...lines.slice(0, 3), ...filler, lines[2], ''].join('\n'));
+    };
+    const secrets = (p: Plan) => p.items.filter((i) => i.tier === 'secret');
+    const remember = (i: PlanItem): Decision => ({ key: i.key, kind: i.kind, subject: i.subject, candidates: i.candidates, answer: 'false-positive', decidedAt: NOW.toISOString() });
+    const replan = async (fx: Awaited<ReturnType<typeof setup>>, decisions: Decision[]) => {
+      const scan = await collectScan(fx.root, { home: fx.home, reposOnly: false, crontabCommand: 'false' });
+      return buildPlan({ scan, decisions, store: join(fx.home, 'dev', 'truth'), home: fx.home, now: NOW });
+    };
+
+    it('get one item each, the later copy keyed apart by its number', async () => {
+      const fx = await setup(copyAt40);
+      const [first, second] = secrets(await fx.plan());
+      expect(first?.candidates).toHaveLength(1);
+      expect(second?.candidates).toEqual([first?.candidates[0], '#2']);
+      expect(second?.key).not.toBe(first?.key);
+      expect(first?.edits['rotate-remove']).toMatchObject([{ line: 3, op: 'remove' }]);
+      expect(second?.edits['rotate-remove']).toMatchObject([{ line: 40, op: 'remove' }]);
+    });
+
+    it('a remembered answer for the first copy answers only the first', async () => {
+      const fx = await setup(copyAt40);
+      const [first] = secrets(await fx.plan());
+      const decision = remember(first as PlanItem);
+      const [a, b] = secrets(await replan(fx, [decision]));
+      expect(a?.answer).toBe('false-positive');
+      expect(b?.answer).toBeNull();
+    });
+
+    it('once the first copy is gone the remaining copy takes over its answer', async () => {
+      const fx = await setup(copyAt40);
+      const [first] = secrets(await fx.plan());
+      const decision = remember(first as PlanItem);
+      const path = join(fx.root, 'shop', 'AGENTS.md');
+      const lines = (await readFile(path, 'utf8')).split('\n');
+      await writeFile(path, [...lines.slice(0, 2), ...lines.slice(3)].join('\n'));
+      const rest = secrets(await replan(fx, [decision]));
+      expect(rest).toHaveLength(1);
+      expect(rest[0]?.answer).toBe('false-positive');
+    });
+
+    it('a remembered rotate-remove is not applied to a repeated line, even after a copy is gone', async () => {
+      const fx = await setup(copyAt40);
+      const [first, second] = secrets(await fx.plan());
+      const removeFirst = { ...remember(first as PlanItem), answer: 'rotate-remove' };
+      const keepSecond = remember(second as PlanItem);
+      const both = secrets(await replan(fx, [removeFirst, keepSecond]));
+      expect(both.map((i) => i.answer)).toEqual([null, 'false-positive']);
+      // Apply removes line 3, so the copy at line 40 becomes the first copy and takes the first copy's key.
+      const path = join(fx.root, 'shop', 'AGENTS.md');
+      const lines = (await readFile(path, 'utf8')).split('\n');
+      await writeFile(path, [...lines.slice(0, 2), ...lines.slice(3)].join('\n'));
+      const rest = secrets(await replan(fx, [removeFirst, keepSecond]));
+      expect(rest).toHaveLength(1);
+      expect(rest[0]?.answer).not.toBe('rotate-remove');
+    });
+
+    it('a line that appears once keeps its remembered rotate-remove', async () => {
+      const fx = await setup();
+      const [only] = secrets(await fx.plan());
+      const decision = { ...remember(only as PlanItem), answer: 'rotate-remove' };
+      expect(secrets(await replan(fx, [decision]))[0]?.answer).toBe('rotate-remove');
+    });
+  });
+
   it('hetzner ip and shop env are auto items', async () => {
     const p = await (await setup()).plan();
     const auto = p.items.filter((i) => i.tier === 'auto');

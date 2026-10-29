@@ -16,6 +16,7 @@ import { renderSvg } from './report/svg.js';
 import { linkMentions } from './link/link.js';
 import { parseTruth } from './truth/parse.js';
 import { AGENT_FORMATS, type AgentFormat, type Finding, type Location, type Mention, type ScanResult, type SkippedFile } from './types.js';
+import { codeOf, nextStep } from './paths.js';
 
 export interface ScanOptions {
   home: string;
@@ -97,7 +98,7 @@ export class NotAFolderError extends Error {}
 export async function assertFolder(root: string): Promise<void> {
   const info = await stat(root).catch((err: NodeJS.ErrnoException) => {
     if (err.code === 'ENOENT' || err.code === 'ENOTDIR') return null;
-    throw new Error(`could not open ${root} (${err.code ?? err.message}). Check its permissions.`, { cause: err });
+    throw new Error(`could not open ${root} (${codeOf(err)}). ${nextStep(err)}`, { cause: err });
   });
   if (!info) throw new NotAFolderError(`${root} does not exist. Pass the folder that holds your repos.`);
   if (info.isFile()) throw new NotAFolderError(`${root} is a file; pass the folder that holds your repos.`);

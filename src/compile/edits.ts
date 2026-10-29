@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import type { PlanItem } from '../plan/types.js';
-import { isDir, shortPath } from '../paths.js';
+import { codeOf, isDir, nextStep, shortPath } from '../paths.js';
 import type { Store } from '../store/types.js';
 import { editReason, readCompiledBlock } from './block.js';
 import { compiledDrift, compiledEditKey, type CompileContext } from './compile.js';
@@ -25,7 +25,7 @@ export async function detectCompiledEdits(root: string, store: Store, ctx: Compi
     for (const d of drift) {
       if (d.kind !== 'edited') continue;
       const text = await readFile(d.file, 'utf8').catch((err: unknown) => {
-        throw new Error(`plan: could not read ${shortPath(d.file, root, ctx.home)} (${(err as NodeJS.ErrnoException).code ?? (err as Error).message}). Check its permissions.`, { cause: err });
+        throw new Error(`plan: could not read ${shortPath(d.file, root, ctx.home)} (${codeOf(err)}). ${nextStep(err)}`, { cause: err });
       });
       let block;
       try {

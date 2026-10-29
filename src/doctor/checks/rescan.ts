@@ -8,7 +8,7 @@ import { isMachinePath } from '../../discover/machine.js';
 import { readTextSafe } from '../../discover/sources.js';
 import { buildPlan, settledByStore } from '../../plan/build.js';
 import type { PlanItem } from '../../plan/types.js';
-import { shortPath } from '../../paths.js';
+import { codeOf, nextStep, shortPath } from '../../paths.js';
 import { packageCommands } from '../../truth/commands.js';
 import type { Check, DoctorContext, Found } from '../types.js';
 
@@ -23,7 +23,7 @@ async function pendingPatches(ctx: DoctorContext): Promise<Map<string, string>> 
     for (const t of entry.targets ?? []) {
       const text = await readFile(t.file, 'utf8').catch((err: NodeJS.ErrnoException) => {
         if (err.code === 'ENOENT') return null;
-        throw new Error(`doctor: could not read ${shortPath(t.file, ctx.root, ctx.home)} (${err.code ?? err.message}). Check its permissions.`, { cause: err });
+        throw new Error(`doctor: could not read ${shortPath(t.file, ctx.root, ctx.home)} (${codeOf(err)}). ${nextStep(err)}`, { cause: err });
       });
       if (text !== null && createHash('sha256').update(text).digest('hex') === t.sha256) out.set(t.file, t.patch);
       else out.delete(t.file);

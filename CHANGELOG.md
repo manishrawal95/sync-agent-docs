@@ -2,6 +2,23 @@
 
 ## 2026-10-28
 
+- A remembered rotate-remove on a secret line that appears more than once is asked again, so removing one copy can no longer delete another copy marked false-positive.
+- apply names a file sitting where the new store's folder would be, and how to pick another store path, before anything is written.
+- plan --ai keeps each entity name from scanned files on its own line of the prompt, so a name cannot add an instruction.
+- A docker-compose port is cited on its own service's line, even when an earlier service names it in depends_on or an image tag.
+- An escaped single quote inside a single-quoted .env value no longer ends the value, so the next line is never stored as a variable name.
+- A package.json script port is cited on its scripts entry, even when an earlier object (exports, say) has the same key.
+- Filesystem errors for a folder read as a file, a full or read-only disk and too many open files now say what to do.
+- Folding a hand-edited view no longer rewrites values with backticks or line breaks that the user did not touch, and doctor no longer counts an @ line inside a list item's code block as an import.
+- doctor and plan cite the line that holds a config value, not the first line that happens to contain the same digits or word.
+- doctor --live reports a self-signed certificate on a host marked local or tailnet as a note, not as a host that is down.
+- A home folder reached through a symlink no longer makes doctor report drift that is not there. Answers remembered for files under such a home are asked once more, since their paths now read as ~/.
+- A file named .github (or another file where an agent file's folder would be) no longer stops compile or doctor; an unreadable agent file and a store under a broken link are named with the fix.
+- Errors name the real next step: a link loop, a file where a folder should be, or permissions, instead of "check its permissions" every time.
+- A store path with a space no longer gets a card import that Claude Code cannot load; compile keeps the project facts in CLAUDE.md and says how to get the import.
+- plan --ai strips control characters from scanned lines and fences them with a random tag, so a scanned file cannot end the data block and give the AI instructions.
+- Two identical secret lines in one file are now asked about, removed and recorded one by one; before, the second copy was dropped from the plan.
+- A quoted .env value with an escaped quote no longer ends early, and a name that looks like a token is never stored, so no part of a secret can reach the scan, the plan or the store.
 - `apply`, `compile` and `rollback` also lock the truth store (`<store>/.git/sync-agent-docs-run.lock`), so two folders that share one store can no longer write it at the same time; the second is refused, naming the run that holds it.
 - Folding a hand-edited view no longer deletes facts whose value is empty; the `(empty)` rows read back as empty values.
 - `--json` output now escapes C1 and bidi control characters as \uXXXX, so file names cannot reorder text in a terminal; the JSON still parses to the same values.

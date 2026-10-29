@@ -2,12 +2,13 @@ import { randomBytes } from 'node:crypto';
 import { lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { git, toplevelOf } from './git.js';
+import { codeOf, nextStep } from './paths.js';
 
 /** Whether `out` exists (null when not); refuses a symlink or a file there, so nothing is read or written through one. */
 async function realDotDir(out: string, stage: string): Promise<{ isDirectory(): boolean } | null> {
   const existing = await lstat(out).catch((err: NodeJS.ErrnoException) => {
     if (err.code === 'ENOENT') return null;
-    throw new Error(`${stage}: could not check ${out} (${err.code ?? err.message}). Check its permissions.`, { cause: err });
+    throw new Error(`${stage}: could not check ${out} (${codeOf(err)}). ${nextStep(err)}`, { cause: err });
   });
   if (existing && !existing.isDirectory()) {
     throw new Error(`${stage}: ${out} is a symlink or not a folder, so nothing was read or written there. Remove it and run the ${stage} again.`);
@@ -65,7 +66,7 @@ export async function openSubDir(dot: string, name: string, stage: string): Prom
   const out = join(dot, name);
   const existing = await lstat(out).catch((err: NodeJS.ErrnoException) => {
     if (err.code === 'ENOENT') return null;
-    throw new Error(`${stage}: could not check ${out} (${err.code ?? err.message}). Check its permissions.`, { cause: err });
+    throw new Error(`${stage}: could not check ${out} (${codeOf(err)}). ${nextStep(err)}`, { cause: err });
   });
   if (existing && !existing.isDirectory()) {
     throw new Error(`${stage}: ${out} is a symlink or not a folder, so nothing was written. Remove it and run the ${stage} again.`);

@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { editReason, readCompiledBlock, type CompiledBlock } from '../../compile/block.js';
 import { compiledDrift, compiledEditKey, isIgnoredOrUntracked } from '../../compile/compile.js';
-import { shortPath } from '../../paths.js';
+import { codeOf, nextStep, shortPath } from '../../paths.js';
 import type { Check, DoctorContext, Found } from '../types.js';
 import { listedRepos } from './repos.js';
 
@@ -16,7 +16,7 @@ async function readBlock(file: string): Promise<{ block: CompiledBlock | null } 
   try {
     text = await readFile(file, 'utf8');
   } catch (err) {
-    throw new Error(`doctor: could not read ${file} (${(err as NodeJS.ErrnoException).code ?? (err as Error).message}). Check its permissions.`, { cause: err });
+    throw new Error(`doctor: could not read ${file} (${codeOf(err)}). ${nextStep(err)}`, { cause: err });
   }
   try {
     return { block: readCompiledBlock(text) };

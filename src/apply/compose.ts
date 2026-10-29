@@ -1,4 +1,5 @@
 import { shortPath } from '../paths.js';
+import { code } from '../views/render.js';
 import { mergeDecisions } from '../plan/decisions.js';
 import type { Evidence, Plan, PlanItem } from '../plan/types.js';
 import { DEFAULT_VIEWS, SCHEMA_VERSION, type Decision, type Store, type StoreEntity, type StoreFact, type StoreSecret } from '../store/types.js';
@@ -48,14 +49,20 @@ export function composeStore(prev: Store | null, plan: Plan, decisions: Decision
   };
 
   const handEdited = new Set<string>();
-  const valuesOf = (list: { attribute: Attribute; value: string }[], a: Attribute): string => list.filter((f) => f.attribute === a).map((f) => f.value).sort().join('\0');
+  // What a stored value reads back as from the view: a row the user left alone parses to exactly this.
+  const asViewed = (v: string): string => (v === '' ? '' : code(v).slice(1, -1));
+  const valuesOf = (list: { attribute: Attribute; value: string }[], a: Attribute, read: (v: string) => string): string => list.filter((f) => f.attribute === a).map((f) => read(f.value)).sort().join('\0');
   for (const b of folded) {
     const old = facts.filter((f) => f.entityId === b.entityId);
     for (const a of new Set([...old, ...b.facts].map((f) => f.attribute))) {
-      if ((a === 'command') === b.commands && valuesOf(old, a) !== valuesOf(b.facts, a)) handEdited.add(`${b.entityId}|${a}`);
+      if ((a === 'command') === b.commands && valuesOf(old, a, asViewed) !== valuesOf(b.facts, a, (v) => v)) handEdited.add(`${b.entityId}|${a}`);
     }
+    // A row maps to the stored fact the view showed that way, so a value the view rewrote (a backtick, a line break) is kept unless the user changed its row. A value the view could not have written is the user's.
+    const taken = new Set<StoreFact>();
     replace(b.entityId, (a) => (a === 'command') === b.commands, b.facts.map((r) => {
-      const known = old.find((f) => f.attribute === r.attribute && f.value === r.value);
+      const open = old.filter((f) => f.attribute === r.attribute && !taken.has(f));
+      const known = open.find((f) => f.value === r.value) ?? open.find((f) => asViewed(f.value) === r.value);
+      if (known) taken.add(known);
       return known ?? { entityId: b.entityId, attribute: r.attribute, value: r.value, sources: [], status: 'inferred' };
     }));
   }

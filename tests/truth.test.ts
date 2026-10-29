@@ -5,7 +5,10 @@ import { describe, expect, it } from 'vitest';
 import { findRepos } from '../src/discover/repos.js';
 import { classifySources } from '../src/discover/sources.js';
 import { parseTruth, withoutCredentials } from '../src/truth/parse.js';
-import { portsInDocLine } from '../src/truth/parsed.js';
+import { parseCompose } from '../src/truth/formats/compose.js';
+import { parseFly } from '../src/truth/formats/fly.js';
+import { parsePackageJson } from '../src/truth/formats/package-json.js';
+import { lineOf, portsInDocLine } from '../src/truth/parsed.js';
 import type { TruthResult } from '../src/types.js';
 import { materializeFixture } from './helpers/fixture.js';
 
@@ -190,6 +193,54 @@ describe('truth', () => {
     expect([...truth.corpus].some((t) => t.includes(tail))).toBe(false);
   });
 
+  describe('env names: quoted values', () => {
+    const fake = 'FAKESECRETBODYZZ9q8w7e6r5t4y3u2i1o==';
+    const namesOf = async (lines: string[]): Promise<string[]> => {
+      const { root } = await materializeFixture('messy-dev');
+      await writeFile(join(root, 'shop', '.env'), [...lines, ''].join('\n'));
+      const truth = await truthOf(root);
+      return truth.facts.filter((f) => f.attribute === 'env' && f.at.path.endsWith(join('shop', '.env'))).map((f) => f.value);
+    };
+
+    it('an escaped double quote does not end the value', async () => {
+      expect(await namesOf(['MULTI="line1\\"', fake, 'tail"', 'PORT_A=4000'])).toEqual(['MULTI', 'PORT_A']);
+    });
+
+    it('an escaped backtick does not end the value', async () => {
+      expect(await namesOf(['MULTI=`line1\\`', fake, 'tail`', 'PORT_A=4000'])).toEqual(['MULTI', 'PORT_A']);
+    });
+
+    it('an escaped quote on a continuation line does not end the value', async () => {
+      expect(await namesOf(['MULTI="line1', 'abc\\"def', fake, 'tail"', 'PORT_A=4000'])).toEqual(['MULTI', 'PORT_A']);
+    });
+
+    it('an escaped single quote does not end the value', async () => {
+      expect(await namesOf(["MULTI='line1\\'", 'FAKE_HIDDEN_PART=more', "tail'", 'PORT_A=4000'])).toEqual(['MULTI', 'PORT_A']);
+    });
+
+    it('a name that looks like a token is never stored, even as a bare line after a closed value', async () => {
+      expect(await namesOf(["MULTI='line1'", fake, 'PORT_A=4000'])).toEqual(['MULTI', 'PORT_A']);
+    });
+
+    it('an all-caps base32 body without an underscore is never stored as a name', async () => {
+      const body = ['JBSWY3DPEHPK3PXP', 'FAKE2345ABCDEFGH=='].join('');
+      expect(await namesOf(["MULTI='line1'", body, 'PORT_A=4000'])).toEqual(['MULTI', 'PORT_A']);
+    });
+
+    it('ordinary long names survive the token backstop', async () => {
+      const ordinary = ['DATABASE_URL', 'NEXT_PUBLIC_API_BASE_URL', 'AWS_REGION', 'NEXT_PUBLIC_GA4_MEASUREMENT_ID', 'GOOGLE_OAUTH2_CLIENT_SECRET', 'AWS_S3_BUCKET_NAME_2', 'S3_BUCKET_REGION_EU_WEST_1', 'OPENAI_API_KEY_GPT4_TURBO', 'STRIPE_WEBHOOK_SECRET_V2_LIVE'];
+      expect(await namesOf(ordinary.map((n) => `${n}=x`))).toEqual(ordinary);
+    });
+
+    it('an even run of backslashes closes the quote', async () => {
+      expect(await namesOf(['A="x\\\\"', 'B=1'])).toEqual(['A', 'B']);
+    });
+
+    it('a multi-line PEM value in double quotes yields only its own name', async () => {
+      expect(await namesOf(['KEY_PEM="-----BEGIN EXAMPLE PRIVATE ' + 'KEY-----', 'QkFBQUFBQUFBQUFBQUFBQUFB=', '-----END EXAMPLE PRIVATE KEY-----"', 'PORT_A=4000'])).toEqual(['KEY_PEM', 'PORT_A']);
+    });
+  });
+
   it('a git refusal other than a missing origin is recorded, not dropped', async () => {
     const { root } = await materializeFixture('messy-dev');
     await mkdir(join(root, 'broken'));
@@ -218,5 +269,42 @@ describe('truth', () => {
   it('each segment of a line is judged on its own command', () => {
     expect(portsInDocLine('`ps -p 1` then `next dev -p 3000`')).toEqual(['3000']);
     expect(portsInDocLine('ps -p 1 && next start -p 3000')).toEqual(['3000']);
+  });
+
+  it('lineOf matches a string only as a whole token and falls back to from', () => {
+    const text = 'a = 8080\nb = 80\nc = 80.5\n';
+    expect(lineOf(text, '80')).toBe(2);
+    expect(lineOf(text, 'missing', 3)).toBe(3);
+    expect(lineOf(text, /b\s*=/)).toBe(2);
+  });
+
+  it('fly cites the line of each internal_port, not a longer number that starts with it', () => {
+    const text = ['app = "x"', '', '[http_service]', 'internal_port = 8080', '', '[[services]]', 'internal_port = 80', ''].join('\n');
+    const lines = parseFly(text).facts?.map((f) => [f.value, f.line]);
+    expect(lines).toEqual([['8080', 4], ['80', 7]]);
+  });
+
+  it('package.json cites the script key, not an earlier "dev" value', () => {
+    const text = ['{', '  "scripts": {', '    "predev": "echo",', '    "build": "run dev",', '    "dev": "next dev -p 4000"', '  }', '}'].join('\n');
+    expect(parsePackageJson(text).facts).toEqual([{ attribute: 'port', value: '4000', line: 5 }]);
+    const earlier = ['{', '  "files": [', '    "dev",', '    "src"', '  ],', '  "scripts": {', '    "dev": "next dev -p 4000"', '  }', '}'].join('\n');
+    expect(parsePackageJson(earlier).facts?.[0]?.line).toBe(7);
+  });
+
+  it('package.json searches for a script key from the scripts line, past an earlier "dev" key', () => {
+    const text = ['{', '  "exports": {', '    ".": {', '      "dev": "./dev.js"', '    }', '  },', '  "scripts": {', '    "dev": "next dev -p 4000"', '  }', '}'].join('\n');
+    expect(parsePackageJson(text).facts).toEqual([{ attribute: 'port', value: '4000', line: 8 }]);
+  });
+
+  it('compose finds a service by its key under services, not by its name in depends_on or an image tag', () => {
+    const text = ['services:', '  api:', '    image: web:1.2', '    depends_on:', '      - web', '    ports:', '      - "8080:5000"', '  "web":', '    ports:', '      - "5000:80"'].join('\n');
+    const facts = parseCompose(text).facts?.map((f) => [f.app, f.value, f.line]);
+    expect(facts).toEqual([['api', '8080', 7], ['web', '5000', 10]]);
+  });
+
+  it('compose cites a port and env name as whole tokens inside their service', () => {
+    const text = ['services:', '  web:', '    ports:', '      - "18080:80"', '      - "8080:80"', '    environment:', '      - MY_TOKEN_X=1', '      - TOKEN=1'].join('\n');
+    const facts = parseCompose(text).facts?.map((f) => [f.value, f.line]);
+    expect(facts).toEqual([['18080', 4], ['8080', 5], ['MY_TOKEN_X', 7], ['TOKEN', 8]]);
   });
 });

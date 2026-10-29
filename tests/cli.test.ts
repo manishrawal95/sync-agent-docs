@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { chmod, mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, realpath, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -193,5 +193,41 @@ describe('cli', () => {
     const bad = run('doctor', root);
     expect(bad.status).toBe(2);
     expect(bad.stderr).toMatch(/^sync-agent-docs doctor failed: .*checks\.json: disabled\[0\] is "rescna"/);
+  });
+
+  it('doctor reports no drift when HOME is a symlink to the home the flow ran under', async () => {
+    const { root, home } = await materializeFixture('messy-dev', { commit: true });
+    const store = join(home, 'truth');
+    const bin = await temp();
+    await writeFile(join(bin, 'crontab'), '#!/bin/sh\necho "no crontab" >&2\nexit 1\n');
+    await chmod(join(bin, 'crontab'), 0o755);
+    const run = (homeDir: string, ...args: string[]) => spawnSync('node', [...cli, ...args], {
+      encoding: 'utf8', env: { ...process.env, HOME: homeDir, NO_COLOR: '1', PATH: `${bin}:${process.env.PATH ?? ''}` },
+    });
+    for (const r of [run(home, 'scan', root), run(home, 'plan', root, '--json', '--accept-auto', '--store', store), run(home, 'apply', root)]) expect(r.status).toBe(0);
+    const applies = JSON.parse(readFileSync(join(root, '.sync-agent-docs', 'applies.json'), 'utf8')) as { applies: { repos: { path: string; branch: string; original: string }[] }[] };
+    for (const a of applies.applies[0]?.repos ?? []) {
+      execFileSync('git', ['switch', '-q', a.original], { cwd: a.path });
+      execFileSync('git', ['merge', '-q', '--ff-only', a.branch], { cwd: a.path });
+    }
+    expect(run(home, 'compile', root).status).toBe(0);
+
+    const link = join(await temp(), 'home-link');
+    await symlink(home, link);
+    const r = run(link, 'doctor', root, '--json');
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    const parsed = JSON.parse(r.stdout) as { drift: boolean; checks: { id: string; status: string }[] };
+    expect(parsed.drift).toBe(false);
+    for (const id of ['fact-checks', 'compiled']) expect(parsed.checks.find((c) => c.id === id)?.status).not.toBe('drift');
+  });
+
+  it('a HOME that cannot be resolved is named on stderr and the raw value is used', async () => {
+    const root = await temp();
+    const loop = join(await temp(), 'loop');
+    await symlink(loop, loop);
+    const r = spawnSync('node', [...cli, 'scan', root, '--repos-only', '--json'], { encoding: 'utf8', env: { ...process.env, HOME: loop, NO_COLOR: '1' } });
+    expect(r.stderr).toContain(`sync-agent-docs: could not resolve your home folder ${loop} (ELOOP); using it as given. A link in the path leads back to itself; fix or delete that link.`);
+    expect(r.status).toBe(0);
   });
 });
