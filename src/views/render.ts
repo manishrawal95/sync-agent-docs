@@ -49,7 +49,10 @@ export const noComments = (s: string): string => s.replaceAll('<!--', '&lt;!--')
 export const inline = (s: string): string => noComments(s.replace(/\r\n|[\r\n\u2028\u2029]/g, ' '));
 /** Scanned text as a code span: an agent reads `@path` there as text, never as an import to load. */
 export const code = (s: string): string => `\`${inline(s).replaceAll('`', "'")}\``;
-export const cell = (s: string): string => code(s).replaceAll('|', '\\|');
+/** What a view shows for a fact whose value is empty, since an empty code span would be two bare backticks. */
+export const EMPTY_VALUE = '(empty)';
+const shown = (value: string): string => (value === '' ? EMPTY_VALUE : code(value));
+export const cell = (s: string): string => shown(s).replaceAll('|', '\\|');
 /** A file name from an entity name: no separators or leading dots, so a card stays in its folder. */
 const fileName = (name: string, id: string): string =>
   name.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[.-]+/, '') || id.replace(/[^A-Za-z0-9._-]+/g, '-');
@@ -83,7 +86,7 @@ export function renderBlocks(store: Store): Record<string, ViewBlock[]> {
     if (e.kind === 'project') {
       const commands = facts.filter((f) => f.attribute === 'command');
       blocks.push({ id: e.id, heading: '## Facts', body: factsTable(facts.filter((f) => f.attribute !== 'command'), e.notes) });
-      blocks.push({ id: `${e.id}:commands`, heading: '## Commands', body: commands.length ? commands.map((f) => `- ${code(f.value)}`).join('\n') : 'No commands recorded yet.' });
+      blocks.push({ id: `${e.id}:commands`, heading: '## Commands', body: commands.length ? commands.map((f) => `- ${shown(f.value)}`).join('\n') : 'No commands recorded yet.' });
     } else {
       blocks.push({ id: e.id, heading: `## ${name}`, body: factsTable(facts, e.notes) });
     }
@@ -125,10 +128,12 @@ export function mergeView(existing: string | null, title: string, blocks: ViewBl
   const wanted = new Map(blocks.map((b) => [b.id, b]));
   if (existing === null) return `# ${title}\n\n${VIEW_HEADER}\n\n${blocks.map(blockText).join('\n\n')}\n`;
   readBlocks(existing);
+  // A file with any CRLF comes back all CRLF, the rule writeCompiledBlock uses; merging runs on LF.
+  const eol = existing.includes('\r\n') ? '\r\n' : '\n';
   const out: string[] = [];
   const placed = new Set<string>();
   let skipping: string | null = null;
-  const lines = existing.split('\n');
+  const lines = existing.replaceAll('\r\n', '\n').split('\n');
   const marks = markerLines(lines);
   for (const [i, line] of lines.entries()) {
     const m = marks[i];
@@ -156,7 +161,7 @@ export function mergeView(existing: string | null, title: string, blocks: ViewBl
   }
   while (out.at(-1) === '') out.pop();
   const added = blocks.filter((b) => !placed.has(b.id)).map(blockText);
-  return `${[out.join('\n'), ...added].join('\n\n')}\n`;
+  return `${[out.join('\n'), ...added].join('\n\n')}\n`.replaceAll('\r\n', '\n').replaceAll('\n', eol);
 }
 
 /** The facts a block states: table rows, and `- \`cmd\`` lines in a Commands block. */
@@ -164,16 +169,18 @@ export function parseBlockFacts(body: string): { attribute: Attribute; value: st
   const out: { attribute: Attribute; value: string }[] = [];
   for (const raw of body.split('\n')) {
     const line = raw.trim();
-    const cmd = /^- `(.+)`$/.exec(line);
-    if (cmd?.[1]) {
+    // shown() writes an empty value as a bare EMPTY_VALUE; a real value is always in backticks.
+    const cmd = line === `- ${EMPTY_VALUE}` ? [line, ''] : /^- `(.+)`$/.exec(line);
+    if (cmd?.[1] !== undefined) {
       out.push({ attribute: 'command', value: cmd[1] });
       continue;
     }
     if (!line.startsWith('|')) continue;
     const cells = line.slice(1, line.endsWith('|') ? -1 : undefined).split(/(?<!\\)\|/).map((c) => c.trim().replaceAll('\\|', '|'));
-    const [attribute, shown] = cells;
-    const value = (shown && /^`(.*)`$/.exec(shown)?.[1]) || shown;
-    if (attribute && value && ATTRIBUTES.has(attribute as Attribute)) out.push({ attribute: attribute as Attribute, value });
+    const [attribute, shownValue] = cells;
+    if (!attribute || !shownValue || !ATTRIBUTES.has(attribute as Attribute)) continue;
+    const value = shownValue === EMPTY_VALUE ? '' : /^`(.*)`$/.exec(shownValue)?.[1] || shownValue;
+    out.push({ attribute: attribute as Attribute, value });
   }
   return out;
 }

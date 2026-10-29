@@ -1,7 +1,7 @@
 import { chmod, mkdir, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { machineSources } from '../src/discover/machine.js';
+import { isMachinePath, machineSources } from '../src/discover/machine.js';
 import { parseTruth } from '../src/truth/parse.js';
 import { materializeFixture } from './helpers/fixture.js';
 
@@ -127,5 +127,51 @@ describe('machine pass', () => {
     await symlink('loop', join(projects, 'loop'));
     const machine = await machineSources(home, NO_CRONTAB);
     expect(machine.sources.map((s) => s.path)).toContain(join(projects, 'p1', 'memory', 'MEMORY.md'));
+  });
+
+  it('~/.cursor/rules is read for .md and .mdc files at any depth and nothing else', async () => {
+    const { home } = await materializeFixture('messy-dev');
+    const rules = join(home, '.cursor', 'rules');
+    await mkdir(join(rules, 'a'), { recursive: true });
+    await writeFile(join(rules, 'top.mdc'), 'port 4100\n');
+    await writeFile(join(rules, 'a', 'b.md'), 'port 4200\n');
+    await writeFile(join(rules, '.DS_Store'), '\0\0bin');
+    const machine = await machineSources(home, NO_CRONTAB);
+    const cursor = machine.sources.filter((s) => s.agent === 'cursor').map((s) => s.path).sort();
+    expect(cursor).toEqual([join(rules, 'a', 'b.md'), join(rules, 'top.mdc')]);
+    expect(machine.skipped.some((s) => s.path.endsWith('.DS_Store'))).toBe(false);
+  });
+
+  it('isMachinePath counts nested cursor rules and not .DS_Store', () => {
+    const home = '/home/u';
+    expect(isMachinePath(home, join(home, '.cursor', 'rules', 'a', 'b.mdc'))).toBe(true);
+    expect(isMachinePath(home, join(home, '.cursor', 'rules', '.DS_Store'))).toBe(false);
+    expect(isMachinePath(home, join(home, '.cursor', 'rules', 'a', 'notes.txt'))).toBe(false);
+  });
+
+  it.skipIf(process.getuid?.() === 0)('an unreadable subfolder of ~/.cursor/rules is skipped and the other rules are kept', async () => {
+    const { home } = await materializeFixture('messy-dev');
+    const rules = join(home, '.cursor', 'rules');
+    await mkdir(join(rules, 'locked'), { recursive: true });
+    await writeFile(join(rules, 'top.mdc'), 'port 4100\n');
+    await writeFile(join(rules, 'locked', 'x.mdc'), 'port 4200\n');
+    await chmod(join(rules, 'locked'), 0o000);
+    try {
+      const machine = await machineSources(home, NO_CRONTAB);
+      expect(machine.sources.filter((s) => s.agent === 'cursor').map((s) => s.path)).toEqual([join(rules, 'top.mdc')]);
+      expect(machine.skipped).toContainEqual(expect.objectContaining({ path: join(rules, 'locked'), reason: 'unreadable' }));
+    } finally {
+      await chmod(join(rules, 'locked'), 0o755);
+    }
+  });
+
+  it('a link loop inside ~/.cursor/rules finishes and reads the real rules once', async () => {
+    const { home } = await materializeFixture('messy-dev');
+    const rules = join(home, '.cursor', 'rules');
+    await mkdir(join(rules, 'sub'), { recursive: true });
+    await writeFile(join(rules, 'sub', 'a.mdc'), 'port 4100\n');
+    await symlink(rules, join(rules, 'sub', 'loop'));
+    const machine = await machineSources(home, NO_CRONTAB);
+    expect(machine.sources.filter((s) => s.agent === 'cursor').map((s) => s.path)).toEqual([join(rules, 'sub', 'a.mdc')]);
   });
 });

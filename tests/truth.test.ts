@@ -56,6 +56,16 @@ describe('truth', () => {
     expect(skipped?.note).not.toContain('abc');
   });
 
+  it('malformed compose file is skipped naming the line', async () => {
+    const { root } = await materializeFixture('messy-dev');
+    const path = join(root, 'shop', 'docker-compose.yml');
+    await writeFile(path, 'services:\n  web:\n    image: shop\n  bad: [\n    REDIS_PASSWORD: hunter2\n');
+    const skipped = (await truthOf(root)).skipped.find((s) => s.path === path);
+    expect(skipped?.reason).toBe('unreadable');
+    expect(skipped?.note).toMatch(/as compose near line [1-9]\d*;/);
+    expect(skipped?.note).not.toContain('hunter2');
+  });
+
   it('compose services, fly apps, wrangler vars and procfile ports become facts', async () => {
     const { root } = await materializeFixture('messy-dev');
     await writeFile(join(root, 'blog', 'docker-compose.yml'), 'services:\n  cache:\n    ports:\n      - "6380:6379"\n    environment:\n      REDIS_PASSWORD: hunter2\n');

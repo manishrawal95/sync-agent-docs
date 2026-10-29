@@ -10,7 +10,7 @@ async function realDotDir(out: string, stage: string): Promise<{ isDirectory(): 
     throw new Error(`${stage}: could not check ${out} (${err.code ?? err.message}). Check its permissions.`, { cause: err });
   });
   if (existing && !existing.isDirectory()) {
-    throw new Error(`${stage}: ${out} .sync-agent-docs is a symlink or not a folder, so nothing was read or written there. Remove it and run the ${stage} again.`);
+    throw new Error(`${stage}: ${out} is a symlink or not a folder, so nothing was read or written there. Remove it and run the ${stage} again.`);
   }
   return existing;
 }
@@ -26,6 +26,24 @@ async function gitignoreIsRight(file: string): Promise<boolean> {
   return text === '*' || text === '*\n';
 }
 
+const writeFailure = (stage: string, out: string, err: unknown): Error =>
+  new Error(`${stage}: could not write ${out} (${(err as NodeJS.ErrnoException).code ?? (err as Error).message}). Make the folder writable and run the ${stage} again.`, { cause: err });
+
+/** Makes the folder; one a parallel run made first counts as made, unless what is there is a link or a file. */
+async function makeFolder(out: string, stage: string): Promise<void> {
+  try {
+    await mkdir(out);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw writeFailure(stage, out, err);
+    const there = await lstat(out).catch((e: NodeJS.ErrnoException) => {
+      throw writeFailure(stage, out, e);
+    });
+    if (!there.isDirectory()) {
+      throw new Error(`${stage}: ${out} is ${there.isSymbolicLink() ? 'a symlink' : 'a file'}, not a folder, so nothing was written there. Move or delete it and run the ${stage} again.`, { cause: err });
+    }
+  }
+}
+
 /**
  * Opens `<root>/.sync-agent-docs`, creating it with a `.gitignore` that ignores the folder itself.
  * Refuses a symlink or a file there, so nothing is ever written through a planted link.
@@ -33,11 +51,11 @@ async function gitignoreIsRight(file: string): Promise<boolean> {
 export async function openDotDir(root: string, stage: string): Promise<string> {
   const out = join(root, '.sync-agent-docs');
   const existing = await realDotDir(out, stage);
+  if (!existing) await makeFolder(out, stage);
   try {
-    if (!existing) await mkdir(out);
     if (!(await gitignoreIsRight(join(out, '.gitignore')))) await writeFresh(out, '.gitignore', '*\n');
   } catch (err) {
-    throw new Error(`${stage}: could not write ${out} (${(err as NodeJS.ErrnoException).code ?? (err as Error).message}). Make the folder writable and run the ${stage} again.`, { cause: err });
+    throw writeFailure(stage, out, err);
   }
   return out;
 }
@@ -52,7 +70,11 @@ export async function openSubDir(dot: string, name: string, stage: string): Prom
   if (existing && !existing.isDirectory()) {
     throw new Error(`${stage}: ${out} is a symlink or not a folder, so nothing was written. Remove it and run the ${stage} again.`);
   }
-  if (!existing) await mkdir(out);
+  try {
+    if (!existing) await mkdir(out);
+  } catch (err) {
+    throw new Error(`${stage}: could not write ${out} (${(err as NodeJS.ErrnoException).code ?? (err as Error).message}). Make the folder writable and run the ${stage} again.`, { cause: err });
+  }
   return out;
 }
 

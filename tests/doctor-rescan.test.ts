@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { appendFile, readdir, readFile, symlink, writeFile } from 'node:fs/promises';
+import { appendFile, chmod, readdir, readFile, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { factChecksCheck } from '../src/doctor/checks/rescan.js';
@@ -87,6 +87,20 @@ describe('doctor: rescan and fact checks', () => {
     expect(c.status).toBe('drift');
     expect(c.findings).toEqual([expect.objectContaining({ key: 'fact-checks:project:shop|port|shop/ecosystem.config.cjs|3300', path: 'shop/ecosystem.config.cjs' })]);
     expect(c.findings[0]?.message).toContain('3300');
+  });
+
+  it.skipIf(process.getuid?.() === 0)('a fact file the user cannot read is one note naming it and its permissions, never its contents', async () => {
+    const { root, doctor } = await applied({ answerAll: true });
+    const path = join(root, 'shop', 'ecosystem.config.cjs');
+    await chmod(path, 0o000);
+    try {
+      const r = await doctor();
+      const c = check(r, 'fact-checks');
+      expect(c.findings).toEqual([expect.objectContaining({ level: 'note', path: 'shop/ecosystem.config.cjs', message: expect.stringMatching(/shop\/ecosystem\.config\.cjs.*permissions/) })]);
+      expect(c.findings[0]?.message).not.toContain('3300');
+    } finally {
+      await chmod(path, 0o644);
+    }
   });
 
   it('with --repos-only, machine-file facts are one note, not drift', async () => {

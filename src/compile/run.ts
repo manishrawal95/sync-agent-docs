@@ -1,12 +1,14 @@
 import { relative } from 'node:path';
 import { BranchRun, branchId, checkRepo, type ApplyEntry } from '../apply/branches.js';
 import { refuseTrackedDotDir } from '../dotdir.js';
+import { withLock } from '../lock.js';
 import { git, toplevelOf } from '../git.js';
 import { inside, isDir, resolveReal, shortPath } from '../paths.js';
 import { readDecisions } from '../plan/decisions.js';
 import { resolveStore } from '../plan/run.js';
 import { readStore } from '../store/io.js';
 import type { Store } from '../store/types.js';
+import { editReason, type EditReason } from './block.js';
 import { compiledEditKey, compileTargets, gitSkip, type CompileContext, type CompileTarget } from './compile.js';
 import { storePath } from './deps.js';
 
@@ -16,7 +18,16 @@ export interface CompileResult { entry: ApplyEntry | null; notes: string[] }
 export const COMPILE_MESSAGE = 'chore(sync-agent-docs): compile agent blocks';
 
 /** What compile would write, by repo, and the hand-edited files with no answer, which the caller refuses or keeps. */
-export interface CompileChanges { changes: Map<string, CompileTarget[]>; notes: string[]; edited: string[] }
+export interface CompileChanges { changes: Map<string, CompileTarget[]>; notes: string[]; edited: { path: string; reason: EditReason }[] }
+
+/** Why compile refuses: the files grouped by the reason their block counts as edited, the same two reasons doctor and plan give. */
+function refusal(edited: CompileChanges['edited']): string {
+  const where = (reason: EditReason): string => edited.filter((e) => e.reason === reason).map((e) => e.path).join(', ');
+  return [
+    where('body-changed') && `the compiled block was edited by hand in ${where('body-changed')}`,
+    where('hash-missing') && `the compiled block's hash line is missing in ${where('hash-missing')}, so sync-agent-docs cannot tell it from a hand edit; a damaged marker looks the same`,
+  ].filter(Boolean).join('; and ');
+}
 
 /**
  * Every agent file to rewrite in every repo the store lists. `texts` gives a file's text by real
@@ -26,7 +37,7 @@ export interface CompileChanges { changes: Map<string, CompileTarget[]>; notes: 
 export async function compileChanges(root: string, store: Store, ctx: CompileContext, answers: Map<string, string>, texts?: ReadonlyMap<string, string>): Promise<CompileChanges> {
   const show = (p: string): string => shortPath(p, root, ctx.home);
   const notes: string[] = [];
-  const edited: string[] = [];
+  const edited: CompileChanges['edited'] = [];
   const changes = new Map<string, CompileTarget[]>();
   const storeReal = await resolveReal(ctx.storeDir, 'compile');
   const rootReal = await resolveReal(storePath(store.config.root, ctx.home, ctx.home), 'compile');
@@ -66,7 +77,7 @@ export async function compileChanges(root: string, store: Store, ctx: CompileCon
           continue;
         }
         if (answer !== 'discard') {
-          edited.push(show(t.path));
+          edited.push({ path: show(t.path), reason: editReason(t.edited) ?? 'body-changed' });
           continue;
         }
       }
@@ -91,39 +102,42 @@ async function unmergedApplies(storeDir: string): Promise<string[]> {
  */
 export async function runCompile(root: string, opts: CompileOptions): Promise<CompileResult> {
   await refuseTrackedDotDir(root, 'compile');
-  const now = opts.now ?? new Date();
-  const storeDir = await resolveStore(root, opts.home, opts.store, 'compile');
-  const store = await readStore(storeDir);
-  if (!store) throw new Error(`compile: there is no truth store at ${storeDir}. Run sync-agent-docs plan and then sync-agent-docs apply to make one, or pass --store with its folder.`);
-  const ctx = { storeDir, home: opts.home };
-  const answers = new Map((await readDecisions(root, storeDir)).map((d) => [d.key, d.answer]));
+  return withLock(root, 'compile', async (lock) => {
+    const now = opts.now ?? new Date();
+    const storeDir = await resolveStore(root, opts.home, opts.store, 'compile');
+    await lock.store(storeDir);
+    const store = await readStore(storeDir);
+    if (!store) throw new Error(`compile: there is no truth store at ${storeDir}. Run sync-agent-docs plan and then sync-agent-docs apply to make one, or pass --store with its folder.`);
+    const ctx = { storeDir, home: opts.home };
+    const answers = new Map((await readDecisions(root, storeDir)).map((d) => [d.key, d.answer]));
 
-  const { changes, notes, edited } = await compileChanges(root, store, ctx, answers);
-  notes.push(...(await unmergedApplies(storeDir)));
-  if (edited.length) {
-    throw new Error(`compile: the compiled block was edited by hand in ${edited.join(', ')}, so nothing was written. Run sync-agent-docs plan to choose whether to keep or discard each edit, then sync-agent-docs apply.`);
-  }
-  if (!changes.size) return { entry: null, notes: ['Every compiled block is up to date. No branch was made.', ...notes] };
-
-  const id = branchId(now);
-  const branch = `sync-agent-docs/compile-${id}`;
-  const originals = new Map<string, string>();
-  for (const repo of changes.keys()) originals.set(repo, await checkRepo(repo, branch, 'compile'));
-
-  const entry: ApplyEntry = { id, at: now.toISOString(), store: storeDir, repos: [], manual: [], skipped: [], kind: 'compile' };
-  const run = await BranchRun.start(root, 'compile', entry);
-  try {
-    await run.record();
-    for (const [repo, targets] of changes) {
-      await run.commitOnBranch(repo, branch, originals.get(repo) ?? 'main', async (t) => {
-        for (const target of targets) await run.write(t, target.path, target.next, target.mode ?? undefined);
-        return COMPILE_MESSAGE;
-      });
+    const { changes, notes, edited } = await compileChanges(root, store, ctx, answers);
+    notes.push(...(await unmergedApplies(storeDir)));
+    if (edited.length) {
+      throw new Error(`compile: ${refusal(edited)}. Nothing was written. Run sync-agent-docs plan to choose whether to keep or discard each, then sync-agent-docs apply.`);
     }
-  } catch (err) {
-    return run.fail(err, null);
-  }
-  return { entry, notes };
+    if (!changes.size) return { entry: null, notes: ['Every compiled block is up to date. No branch was made.', ...notes] };
+
+    const id = branchId(now);
+    const branch = `sync-agent-docs/compile-${id}`;
+    const originals = new Map<string, string>();
+    for (const repo of changes.keys()) originals.set(repo, await checkRepo(repo, branch, 'compile'));
+
+    const entry: ApplyEntry = { id, at: now.toISOString(), store: storeDir, repos: [], manual: [], skipped: [], kind: 'compile' };
+    const run = await BranchRun.start(root, 'compile', entry);
+    try {
+      await run.record();
+      for (const [repo, targets] of changes) {
+        await run.commitOnBranch(repo, branch, originals.get(repo) ?? 'main', async (t) => {
+          for (const target of targets) await run.write(t, target.path, target.next, target.mode ?? undefined);
+          return COMPILE_MESSAGE;
+        });
+      }
+    } catch (err) {
+      return run.fail(err, null);
+    }
+    return { entry, notes };
+  });
 }
 
 export function renderCompileSummary({ entry, notes }: CompileResult): string {

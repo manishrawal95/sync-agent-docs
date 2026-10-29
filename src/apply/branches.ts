@@ -1,6 +1,7 @@
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { branchTip, commitAll, currentBranch, git, isDirty, isTracked } from '../git.js';
+import { shellQuote } from './edits.js';
 import { readJsonFile, writeJsonAtomic, writeTextAtomic } from '../store/io.js';
 import { SCHEMA_VERSION } from '../store/types.js';
 
@@ -38,11 +39,12 @@ export async function readApplies(root: string, stage: string): Promise<Applies>
   return (await readJsonFile<Applies>(appliesPath(root), stage)) ?? { schema: SCHEMA_VERSION, applies: [] };
 }
 
-/** Refuses a repo that cannot be branched cleanly: detached, dirty, or already holding the branch. */
+/** Refuses a repo that cannot be branched cleanly: detached, dirty, holding a plain `sync-agent-docs` branch, or already holding the branch. */
 export async function checkRepo(repo: string, branch: string, stage: BranchStage): Promise<string> {
   const original = await currentBranch(repo);
   if (!original) throw new Error(`${stage}: ${repo} is on a detached HEAD, so nothing was written. Check out a branch and run sync-agent-docs ${stage} again.`);
   if (await isDirty(repo)) throw new Error(`${stage}: ${repo} has uncommitted changes, so nothing was written. Commit or stash them and run sync-agent-docs ${stage} again.`);
+  if (await branchTip(repo, 'sync-agent-docs')) throw new Error(`${stage}: ${repo} has a branch named sync-agent-docs, so git cannot make ${branch} beside it and nothing was written. Rename it with: git -C ${shellQuote(repo)} branch -m sync-agent-docs <new-name>, then run sync-agent-docs ${stage} again.`);
   if (await branchTip(repo, branch)) throw new Error(`${stage}: ${repo}: branch ${branch} already exists, so nothing was written. Wait a second and run sync-agent-docs ${stage} again, or delete that branch.`);
   return original;
 }

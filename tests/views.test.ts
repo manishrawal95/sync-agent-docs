@@ -159,3 +159,69 @@ describe('views', () => {
     expect(readBlocks(text)).toEqual({ 'host:y': 'body' });
   });
 });
+
+describe('views: line endings, BOM, empty values', () => {
+  const hostBlocks = [{ id: 'host:x', heading: '## `x`', body: '| ip | `100.64.1.2` | verified |' }];
+  const headers = (t: string) => t.split(VIEW_HEADER).length - 1;
+
+  it('merging a CRLF view keeps one header and CRLF on every line', () => {
+    let v = mergeView(null, 'Hosts', hostBlocks).replaceAll('\n', '\r\n');
+    for (let i = 0; i < 3; i++) v = mergeView(v, 'Hosts', hostBlocks);
+    expect(headers(v)).toBe(1);
+    expect(v.split('\r\n').join('')).not.toContain('\n');
+  });
+
+  it('a view mixing CRLF and LF lines comes back with one header, all CRLF', () => {
+    const lf = mergeView(null, 'Hosts', hostBlocks);
+    const mixed = lf.replace('\n', '\r\n'); // only the first break is CRLF
+    const v = mergeView(mergeView(mixed, 'Hosts', hostBlocks), 'Hosts', hostBlocks);
+    expect(headers(v)).toBe(1);
+    expect(v.split('\r\n').join('')).not.toContain('\n');
+  });
+
+  it('an LF view stays LF', () => {
+    const v = mergeView(mergeView(null, 'Hosts', hostBlocks), 'Hosts', hostBlocks);
+    expect(v).not.toContain('\r');
+  });
+
+  it('a BOM before a leading fence does not turn the example into a block', () => {
+    const bom = '\uFEFF```md\n<!-- sync-agent-docs:begin compiled -->\n```\n\nreal text\n';
+    expect(readBlocks(bom)).toEqual({});
+  });
+
+  it('a BOM right before a real marker still reads the block', () => {
+    expect(readBlocks('\uFEFF<!-- sync-agent-docs:begin a -->\nbody\n<!-- sync-agent-docs:end a -->\n')).toEqual({ a: 'body' });
+  });
+
+  it('a fact whose value is the text (empty) round-trips', () => {
+    const s = store();
+    s.facts.push({ entityId: 'host:hetzner', attribute: 'url', value: '(empty)', sources: [], status: 'verified' });
+    const host = renderBlocks(s)['hosts.md']?.[0]?.body ?? '';
+    expect(parseBlockFacts(host).filter((f) => f.attribute === 'url')).toEqual([{ attribute: 'url', value: '(empty)' }]);
+  });
+
+  it('a CRLF inside a block body merged into a CRLF view never becomes CR CR LF', () => {
+    const body = [{ id: 'host:x', heading: '## `x`', body: 'one\r\ntwo' }];
+    const crlf = mergeView(null, 'Hosts', hostBlocks).replaceAll('\n', '\r\n');
+    const v = mergeView(crlf, 'Hosts', body);
+    expect(v).not.toContain('\r\r');
+    expect(v.split('\r\n').join('')).not.toContain('\n');
+  });
+
+  it('an empty value renders as (empty) and survives a fold of a block edited elsewhere', () => {
+    const s = store();
+    s.facts.push({ entityId: 'host:hetzner', attribute: 'url', value: '', sources: [], status: 'verified' });
+    s.facts.push({ entityId: 'project:shop', attribute: 'command', value: '', sources: [], status: 'verified' });
+    const blocks = renderBlocks(s);
+    const host = blocks['hosts.md']?.[0]?.body ?? '';
+    expect(host).toContain('| url | (empty) | verified |');
+    expect(host).not.toContain('``');
+    const commands = blocks['projects/shop.md']?.find((b) => b.id.endsWith(':commands'))?.body ?? '';
+    expect(commands).toContain('- (empty)');
+    const edited = host.replace('`100.64.1.10`', '`100.64.1.11`');
+    expect(edited).not.toBe(host);
+    expect(parseBlockFacts(edited)).toContainEqual({ attribute: 'url', value: '' });
+    expect(parseBlockFacts(edited)).toContainEqual({ attribute: 'ip', value: '100.64.1.11' });
+    expect(parseBlockFacts(commands).map((f) => f.value).sort()).toEqual(['', 'npm run test']);
+  });
+});

@@ -2,6 +2,26 @@
 
 ## 2026-10-28
 
+- `apply`, `compile` and `rollback` also lock the truth store (`<store>/.git/sync-agent-docs-run.lock`), so two folders that share one store can no longer write it at the same time; the second is refused, naming the run that holds it.
+- Folding a hand-edited view no longer deletes facts whose value is empty; the `(empty)` rows read back as empty values.
+- `--json` output now escapes C1 and bidi control characters as \uXXXX, so file names cannot reorder text in a terminal; the JSON still parses to the same values.
+- `plan --ai` rejects an agent CLI that answers and exits 0 without reading the whole prompt, instead of using its answer.
+- `compile` now says "hash line is missing" when that is why it refuses, instead of "edited by hand".
+- doctor no longer stops on a link loop or a folder at an agent file, or on a fact file it cannot read; it says which file and why. compile skips such a path with a note, and apply refuses it before writing.
+- apply and compile now refuse up front, naming the repo, when it has a branch called plain sync-agent-docs, instead of failing halfway on git's ref conflict.
+- A manual patch for a file outside git no longer adds a line the file already has.
+- doctor and plan now say why a compiled block counts as edited: its hash line is missing (often a damaged marker) or its body changed.
+- plan, apply, compile and rollback on the same folder no longer run at once: the second is refused, naming the first one's process and start time, instead of failing with a bare EEXIST or interleaving writes. A lock left by a killed run is taken over.
+- When doctor fails (exit 2) it now deletes the `doctor.json` an earlier run left, so a missing file means the last run failed and a cron job never reads an old result as current.
+- Error lines no longer repeat the command name ("sync-agent-docs rollback failed: rollback: …").
+- A compose file that does not parse is reported with the line to look at again ("near line N").
+- File names and doc lines can no longer reorder what the terminal shows: right-to-left override and isolate characters are dropped before printing, like other control characters.
+- Public DNS resolvers (1.1.1.1, 8.8.8.8, 8.8.4.4, 9.9.9.9) in a doc are no longer reported as stale IPs.
+- `plan --ai` now passes the doc lines to `claude` on standard input instead of its command line, so other users on the machine cannot see them in `ps`.
+- Cursor rules in subfolders of .cursor/rules are now read as Cursor rules, and files there that are not .md or .mdc (such as .DS_Store) are no longer read or reported.
+- A generated view checked out with CRLF line endings no longer gains a second header on each apply, and keeps CRLF on every line.
+- A file starting with a byte-order mark and a code fence is no longer misread as holding a sync-agent-docs block.
+- An empty fact value shows as (empty) in views and compiled blocks instead of two bare backticks.
 - compile and doctor treat a hard-linked CLAUDE.md and AGENTS.md as one file, ignore a card import shown inside a code fence, and loaded-size reports missing or out-of-root repos when the compiled check is off.
 - doctor's loaded-size finding names the imports it counted and rounds the size up, so a file just over budget never reads as 8.0 KB; it and compile no longer stop on a link loop or a non-file at an agent path.
 - `compile` no longer lists a repo's own project facts twice in CLAUDE.md: when the project card import already sits outside the block, the block leaves those facts to the card. Such CLAUDE.md blocks show as stale once; run `sync-agent-docs compile` to rewrite them.

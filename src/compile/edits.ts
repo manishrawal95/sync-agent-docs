@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import type { PlanItem } from '../plan/types.js';
 import { isDir, shortPath } from '../paths.js';
 import type { Store } from '../store/types.js';
-import { readCompiledBlock } from './block.js';
+import { editReason, readCompiledBlock } from './block.js';
 import { compiledDrift, compiledEditKey, type CompileContext } from './compile.js';
 import { storePath } from './deps.js';
 
@@ -38,7 +38,7 @@ export async function detectCompiledEdits(root: string, store: Store, ctx: Compi
       const { key, subject } = compiledEditKey(d.file, block, root, ctx.home);
       items.push({
         key, tier: 'move', kind: 'compiled-edit', subject, candidates: [block.actual],
-        title: `${subject}: the compiled block was edited by hand`, evidence: [],
+        title: editReason(block) === 'hash-missing' ? `${subject}: the compiled block has lost its hash line` : `${subject}: the compiled block was edited by hand`, evidence: [],
         options: ['discard', 'keep'], recommended: 'discard', answer: null, edits: {},
         notes: ['discard: compile rewrites the block from the store; change the store to change it. keep: compile leaves this edit in place until the block is edited again.'],
       });

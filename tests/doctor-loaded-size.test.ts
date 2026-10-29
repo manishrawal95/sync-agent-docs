@@ -81,6 +81,11 @@ describe('loadedSize', () => {
     expect((await loadedSize(p, p, opts)).imports).toEqual([join(repo, 'docs', 'notes.md')]);
   });
 
+  it('a fenced block in a nested list item is still a fence, so its @ line is not counted', async () => {
+    const { p } = await agentFile('- step\n    ```\n    @docs/deep.md\n    ```\n   ```\n@docs/deep.md\n    ```\n@docs/notes.md\n');
+    expect((await loadedSize(p, p, opts)).imports).toEqual([join(repo, 'docs', 'notes.md')]);
+  });
+
   it('never counts an import outside the root and the store, direct or through a link', async () => {
     await symlink(join(home, 'elsewhere', 'big.md'), join(repo, 'docs', 'out.md'));
     const { p, bytes } = await agentFile('@~/elsewhere/big.md\n@docs/out.md\n');

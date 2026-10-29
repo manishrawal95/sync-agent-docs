@@ -1,3 +1,4 @@
+import { rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { openDotDir, refuseTrackedDotDir } from '../dotdir.js';
 import { readDecisions } from '../plan/decisions.js';
@@ -32,8 +33,29 @@ const CHECKS: Check[] = [rescanCheck, factChecksCheck, compiledCheck, loadedSize
  * Writes nothing else. Throws when doctor itself cannot run; drift is in the result.
  */
 export async function runDoctor(root: string, opts: DoctorOptions): Promise<DoctorResult> {
-  const now = opts.now ?? new Date();
   await refuseTrackedDotDir(root, 'doctor');
+  try {
+    return await runChecks(root, opts);
+  } catch (err) {
+    throw await withStaleResultRemoved(root, err);
+  }
+}
+
+/** Deletes .sync-agent-docs/doctor.json so a failed run never leaves an old result looking current; returns the error to throw. */
+async function withStaleResultRemoved(root: string, err: unknown): Promise<Error> {
+  const saved = join(root, '.sync-agent-docs', 'doctor.json');
+  try {
+    await rm(saved, { force: true });
+  } catch (rmErr) {
+    const original = err instanceof Error ? err.message : String(err);
+    const why = (rmErr as NodeJS.ErrnoException).code ?? (rmErr as Error).message;
+    return new Error(`${original} It also could not delete the old ${saved} (${why}); delete it by hand so no one reads it as the last result.`, { cause: err });
+  }
+  return err instanceof Error ? err : new Error(String(err));
+}
+
+async function runChecks(root: string, opts: DoctorOptions): Promise<DoctorResult> {
+  const now = opts.now ?? new Date();
   const storeDir = await resolveStore(root, opts.home, opts.store ? resolve(opts.store) : undefined, 'doctor');
   const store = await readStore(storeDir);
   if (!store) throw new Error(`doctor: ${storeDir} has no sync-agent-docs.json, so there is no store to check against. Run sync-agent-docs plan and sync-agent-docs apply first, or pass --store with your store folder.`);

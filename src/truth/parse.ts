@@ -43,9 +43,10 @@ function parserFor(file: SourceFile): FormatParser | undefined {
   return PARSERS[file.format];
 }
 
-/** Line number only: parser messages can quote the file, and the file can hold secrets. */
+/** Line number only (smol-toml's `line`, yaml's `linePos`): parser messages can quote the file, and the file can hold secrets. */
 function parseNote(file: SourceFile, err: unknown): string {
-  const line = (err as { line?: unknown }).line;
+  const found = err as { line?: unknown; linePos?: { line?: unknown }[] };
+  const line = found.line ?? found.linePos?.[0]?.line;
   const where = typeof line === 'number' ? ` near line ${line}` : '';
   return `could not parse ${file.path} as ${file.format}${where}; fix its syntax to include it`;
 }

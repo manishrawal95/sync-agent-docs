@@ -287,4 +287,49 @@ describe('discover', () => {
       await chmod(gi, 0o644);
     }
   });
+
+  it('reads nested cursor rules and nothing else under .cursor/rules', async () => {
+    const { root } = await materializeFixture('messy-dev');
+    const shop = join(root, 'shop');
+    const rules = join(shop, '.cursor', 'rules');
+    await mkdir(join(rules, 'backend', 'db'), { recursive: true });
+    await writeFile(join(rules, 'top.mdc'), 'port 4100\n');
+    await writeFile(join(rules, 'backend', 'db', 'pg.md'), 'port 5432\n');
+    await writeFile(join(rules, '.DS_Store'), '\0\0bin');
+    await writeFile(join(rules, 'backend', 'notes.txt'), 'port 4200\n');
+    const skipped: SkippedFile[] = [];
+    const found = await classifySources({ name: 'shop', path: shop }, skipped);
+    const cursor = found.filter((s) => s.agent === 'cursor').map((s) => s.path).sort();
+    expect(cursor).toEqual([join(rules, 'backend', 'db', 'pg.md'), join(rules, 'top.mdc')]);
+    expect(found.some((s) => s.path.endsWith('.DS_Store') || s.path.endsWith('notes.txt'))).toBe(false);
+    expect(skipped.some((s) => s.path.endsWith('.DS_Store'))).toBe(false);
+  });
+
+  it.skipIf(process.getuid?.() === 0)('an unreadable cursor rules subfolder is skipped and the other rules are kept', async () => {
+    const { root } = await materializeFixture('messy-dev');
+    const shop = join(root, 'shop');
+    const rules = join(shop, '.cursor', 'rules');
+    await mkdir(join(rules, 'locked'), { recursive: true });
+    await writeFile(join(rules, 'top.mdc'), 'port 4100\n');
+    await chmod(join(rules, 'locked'), 0o000);
+    try {
+      const skipped: SkippedFile[] = [];
+      const found = await classifySources({ name: 'shop', path: shop }, skipped);
+      expect(found.filter((s) => s.agent === 'cursor').map((s) => s.path)).toEqual([join(rules, 'top.mdc')]);
+      expect(skipped).toContainEqual(expect.objectContaining({ path: join(rules, 'locked'), reason: 'unreadable' }));
+    } finally {
+      await chmod(join(rules, 'locked'), 0o755);
+    }
+  });
+
+  it('a link loop inside .cursor/rules finishes', async () => {
+    const { root } = await materializeFixture('messy-dev');
+    const shop = join(root, 'shop');
+    const rules = join(shop, '.cursor', 'rules');
+    await mkdir(join(rules, 'sub'), { recursive: true });
+    await writeFile(join(rules, 'sub', 'a.mdc'), 'port 4100\n');
+    await symlink(rules, join(rules, 'sub', 'loop'));
+    const found = await classifySources({ name: 'shop', path: shop }, []);
+    expect(found.filter((s) => s.agent === 'cursor').map((s) => s.path)).toEqual([join(rules, 'sub', 'a.mdc')]);
+  });
 });

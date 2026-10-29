@@ -56,6 +56,22 @@ describe('apply', () => {
     expect(git(join(root, 'shop'), 'branch', '--list', 'sync-agent-docs/*')).toBe('');
   });
 
+  it('a branch named sync-agent-docs is refused before anything is written', async () => {
+    const { root, store, apply } = await planned();
+    git(join(root, 'shop'), 'branch', 'sync-agent-docs');
+    const before = tips(root);
+    await expect(apply()).rejects.toThrow(/apply: .*shop has a branch named sync-agent-docs.*nothing was written.*git -C '.*shop' branch -m sync-agent-docs/);
+    expect(tips(root)).toEqual(before);
+    for (const r of ['ops', 'shop', 'blog']) expect(git(join(root, r), 'branch', '--list', 'sync-agent-docs/*')).toBe('');
+    await expect(stat(store)).rejects.toThrow(/ENOENT/);
+  });
+
+  it('a branch named sync-agent-docs-old is not refused', async () => {
+    const { root, apply } = await planned();
+    git(join(root, 'shop'), 'branch', 'sync-agent-docs-old');
+    await expect(apply()).resolves.toBeDefined();
+  });
+
   it('apply writes the store, views and edits on new branches and leaves main untouched', async () => {
     const { root, store, apply } = await planned();
     const before = tips(root);
@@ -187,7 +203,8 @@ describe('apply', () => {
   it('apply without a plan says to run sync-agent-docs plan', async () => {
     const fx = await materializeFixture('messy-dev', { commit: true });
     await expect(runApply(fx.root, { home: fx.home, now: NOW })).rejects.toThrow(/run sync-agent-docs plan first/i);
-    expect(await readdir(fx.root)).not.toContain('.sync-agent-docs');
+    // The run lock opens the folder; the refusal leaves it holding only the .gitignore, no plan, applies or lock.
+    expect(await readdir(join(fx.root, '.sync-agent-docs'))).toEqual(['.gitignore']);
   });
 
   it('a plan.json store outside home is refused, with no way around it in apply', async () => {

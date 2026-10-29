@@ -3,9 +3,10 @@ import { lstat, mkdir, readFile, realpath } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { refusedLink } from '../compile/links.js';
 import { openDotDir, openSubDir, refuseTrackedDotDir, writeFresh } from '../dotdir.js';
+import { withLock } from '../lock.js';
 import { commitAll, git, GitError, isDirty, isIgnored, isTracked, toplevelOf } from '../git.js';
 import { machineClaimPaths } from '../discover/machine.js';
-import { checkStorePath, inside, resolveReal, shortPath } from '../paths.js';
+import { checkStorePath, inside, isDir, linkLoop, resolveReal, shortPath } from '../paths.js';
 import { readDecisions } from '../plan/decisions.js';
 import { toDecision } from '../plan/prompt.js';
 import { swapValue } from '../plan/lines.js';
@@ -163,182 +164,192 @@ export async function runApply(root: string, opts: ApplyOptions): Promise<ApplyE
   const id = branchId(now);
   const branch = `sync-agent-docs/apply-${id}`;
   await refuseTrackedDotDir(root, 'apply');
-  const plan = await readPlan(root);
-  const storeDir = await checkStorePath(plan.store, opts.home, join(root, '.sync-agent-docs', 'plan.json'), 'apply', 'Run sync-agent-docs plan --store <folder> with a folder inside your home folder.');
-  const show = (p: string): string => shortPath(p, root, opts.home);
+  return withLock(root, 'apply', async (lock) => {
+    const plan = await readPlan(root);
+    const storeDir = await checkStorePath(plan.store, opts.home, join(root, '.sync-agent-docs', 'plan.json'), 'apply', 'Run sync-agent-docs plan --store <folder> with a folder inside your home folder.');
+    await lock.store(storeDir);
+    const show = (p: string): string => shortPath(p, root, opts.home);
 
-  // Group edits by repo; a file outside any repo, or one git does not track, gets a patch instead.
-  const { byPath, itemsByPath } = chosenEdits(plan, show);
-  const repoFiles = new Map<string, { real: string; text: string; edits: Edit[]; items: PlanItem[] }[]>();
-  const manual: { path: string; text: string; edits: Edit[]; why: string }[] = [];
-  // plan.json is a file anyone can edit: an edit may only reach the scanned folder or a machine agent
-  // file. The folder is resolved, not the file, so a linked agent file stays the link rule's to judge.
-  const where = async (p: string): Promise<string> => join(await resolveReal(dirname(p), 'apply'), basename(p));
-  const realRoot = await realpath(root);
-  const machine = new Set(await Promise.all((await machineClaimPaths(opts.home)).map(where)));
-  for (const path of byPath.keys()) {
-    const at = await where(path);
-    if (!inside(at, realRoot) && !machine.has(at)) {
-      const items = (itemsByPath.get(path) ?? []).map((i) => i.title).join('; ');
-      throw new Error(`apply: ${show(path)} is outside ${show(root)} and is not a machine agent file, so nothing was written. Items: ${items}. Run sync-agent-docs plan again; it proposes no edit there.`);
-    }
-  }
-  for (const [path, edits] of byPath) {
-    // An old plan.json can predate the link; the rule is the one compile and plan follow.
-    const refused = await refusedLink(path, 'apply');
-    if (refused) {
-      const items = (itemsByPath.get(path) ?? []).map((i) => i.title).join('; ');
-      throw new Error(`apply: ${show(path)} is a link to ${refused.inRepo ? refused.target : show(refused.real)}, which is not an agent file, so nothing was written. Items: ${items}. Run sync-agent-docs plan again; it proposes no edit there.`);
-    }
-    let real: string;
-    let text: string;
-    try {
-      real = await realpath(path);
-      text = await readFile(real, 'utf8');
-    } catch (err) {
-      throw new Error(`apply: could not read ${show(path)} (${(err as NodeJS.ErrnoException).code ?? (err as Error).message}), so nothing was written; run sync-agent-docs plan again.`, { cause: err });
-    }
-    checkEdits(text, edits, show(path));
-    const repo = await toplevelOf(real);
-    if (!repo || !(await isTracked(repo, real))) {
-      manual.push({ path, text, edits, why: repo ? 'git does not track it' : 'it is not inside a git repository' });
-      continue;
-    }
-    repoFiles.set(repo, [...(repoFiles.get(repo) ?? []), { real, text, edits, items: itemsByPath.get(path) ?? [] }]);
-  }
-
-  // Files that only get a patch: the store records them, and a secret in one is not reported removed.
-  const manualPaths = new Set(manual.map((m) => m.path));
-
-  // A new store is `git init`ed where it stands, so the repo around it must be clean first.
-  const storeExists = await exists(storeDir);
-  let storeParent: string | null = null;
-  if (!storeExists) {
-    try {
-      storeParent = await toplevelOf(await nearestExisting(dirname(storeDir)));
-    } catch (err) {
-      if (err instanceof GitError) throw err;
-      throw new Error(`apply: could not check where the new store ${storeDir} would be created (${(err as NodeJS.ErrnoException).code ?? (err as Error).message}), so nothing was written. Check that the folders above it exist and are readable, or pick another store path with sync-agent-docs plan --store <folder>.`, { cause: err });
-    }
-    if (storeParent && (await isDirty(storeParent))) {
-      throw new Error(`apply: ${storeParent} has uncommitted changes and the new store ${storeDir} would be created inside it, so nothing was written. Commit or stash them there, or pick another store path with sync-agent-docs plan --store <folder> outside that repo.`);
-    }
-  }
-
-  const originals = new Map<string, string>();
-  for (const repo of repoFiles.keys()) originals.set(repo, await checkRepo(repo, branch, 'apply'));
-
-  if (storeExists) {
-    const top = await toplevelOf(storeDir);
-    if (top !== (await realpath(storeDir))) {
-      throw new Error(`apply: ${storeDir} exists but is not the top of a git repository, so nothing was written. Run sync-agent-docs plan --store with another folder, or run git init there.`);
-    }
-    if (!originals.has(top)) originals.set(top, await checkRepo(top, branch, 'apply'));
-  }
-
-  const prev = storeExists ? await readStore(storeDir) : null;
-  // A view block edited by hand after plan ran (or edited again since) has no answer in plan.json:
-  // overwriting it would lose the edit. The key holds the edited text's hash, so a re-edit is new.
-  const planned = new Set(plan.items.filter((i) => i.kind === 'view-edit').map((i) => i.key));
-  const late = prev ? (await detectViewEdits(storeDir, prev, 'apply')).filter((i) => !planned.has(i.key)) : [];
-  if (late.length) {
-    throw new Error(`apply: ${late.map((i) => i.subject).join(', ')} ${late.length === 1 ? 'was' : 'were'} edited by hand after the plan was made, so nothing was written. Run sync-agent-docs plan again to choose what to keep.`);
-  }
-  // A remembered answer someone changed by hand in plan.json is a new decision too.
-  const known = await readDecisions(root, storeDir);
-  const stored = new Map(known.map((d) => [d.key, d.answer]));
-  const answered = plan.items.filter((i) => i.answer !== null && (i.answeredBy !== 'remembered' || stored.get(i.key) !== i.answer));
-  const decisions = [...known, ...answered.map((i) => toDecision(i, i.answer ?? '', now))];
-  const store = composeStore(prev, plan, decisions, opts.home, await foldedBlocks(storeDir, plan), manualPaths);
-  const openEdits = new Set(plan.items.filter((i) => i.kind === 'view-edit' && i.answer === null).map((i) => i.subject));
-  const views = await renderViews(storeDir, store, openEdits);
-  store.config.generated = Object.fromEntries([...views].map(([file, v]) => [file, v.hashes]));
-  if (storeExists) {
-    // A store or view file that is there but untracked would be overwritten, and an ignored one
-    // would then fail to commit.
-    const real = await realpath(storeDir);
-    for (const path of [...storeFiles(real, store).map(([p]) => p), ...[...views.keys()].map((f) => join(real, f))]) {
-      if ((await exists(path)) && !(await isTracked(real, path))) {
-        if (await isIgnored(real, path)) {
-          throw new Error(`apply: ${path} is in the store but git ignores it, so nothing was written. Take it out of the store's .gitignore and commit it, or move it away, then run sync-agent-docs apply again.`);
-        }
-        throw new Error(`apply: ${path} is in the store but git does not track it, so nothing was written. Commit it or move it away, then run sync-agent-docs apply again.`);
+    // Group edits by repo; a file outside any repo, or one git does not track, gets a patch instead.
+    const { byPath, itemsByPath } = chosenEdits(plan, show);
+    const repoFiles = new Map<string, { real: string; text: string; edits: Edit[]; items: PlanItem[] }[]>();
+    const manual: { path: string; text: string; edits: Edit[]; why: string }[] = [];
+    // plan.json is a file anyone can edit: an edit may only reach the scanned folder or a machine agent
+    // file. The folder is resolved, not the file, so a linked agent file stays the link rule's to judge.
+    const where = async (p: string): Promise<string> => join(await resolveReal(dirname(p), 'apply'), basename(p));
+    const realRoot = await realpath(root);
+    const machine = new Set(await Promise.all((await machineClaimPaths(opts.home)).map(where)));
+    for (const path of byPath.keys()) {
+      const at = await where(path);
+      if (!inside(at, realRoot) && !machine.has(at)) {
+        const items = (itemsByPath.get(path) ?? []).map((i) => i.title).join('; ');
+        throw new Error(`apply: ${show(path)} is outside ${show(root)} and is not a machine agent file, so nothing was written. Items: ${items}. Run sync-agent-docs plan again; it proposes no edit there.`);
       }
     }
-  }
-
-  // Agent files get their compiled blocks in the same commit as their line edits; a block edited by
-  // hand is kept until plan's compiled-edit question is answered discard.
-  const answers = new Map<string, string>();
-  for (const d of known) if (d.answer !== null) answers.set(d.key, d.answer);
-  for (const i of plan.items) if (i.answer !== null) answers.set(i.key, i.answer);
-  const edited = new Map([...repoFiles.values()].flat().map((f) => [f.real, editText(f.text, f.edits)]));
-  // By real repo and real file path, the keys the line edits use.
-  const compiled = new Map<string, Map<string, CompileTarget>>();
-  for (const [repo, targets] of (await compileChanges(root, store, { storeDir, home: opts.home }, answers, edited)).changes) {
-    const real = await realpath(repo);
-    const files = new Map<string, CompileTarget>();
-    for (const c of targets) files.set(await resolveReal(c.path, 'apply'), c);
-    compiled.set(real, files);
-    if (!originals.has(real)) originals.set(real, await checkRepo(real, branch, 'apply'));
-  }
-
-  // Every check passed: from here on, write.
-  const dot = await openDotDir(root, 'apply');
-  const entry: ApplyEntry = {
-    id, at: now.toISOString(), store: storeDir, repos: [], manual: [],
-    skipped: plan.items.filter((i) => i.answer === null).map((i) => i.title),
-    ...(storeParent ? { storeParent } : {}),
-    secrets: [
-      ...plan.items.filter((i) => i.secretAt && i.answer === 'rotate-manual').flatMap((i) => i.notes.filter((n) => n.startsWith('the secret stays in '))),
-      ...plan.items.filter((i) => i.kind === 'secret' && i.answer === 'rotate-remove').flatMap((i) => (i.edits['rotate-remove'] ?? []).filter((e) => manualPaths.has(e.path)).map((e) => `${show(e.path)}:${e.line} (patch written; rotate the key and apply the patch by hand)`)),
-    ],
-  };
-  // Checked before any branch exists, so a planted link stops the run with nothing to undo.
-  const patches = manual.length ? await openSubDir(dot, 'manual', 'apply') : '';
-  const run = await BranchRun.start(root, 'apply', entry);
-  run.at = 'the manual patches';
-  try {
-    for (const [n, m] of manual.entries()) {
-      const name = `${id}-${n + 1}-${basename(m.path)}.patch`;
-      await writeFresh(patches, name, manualPatch(m.path, m.text, m.edits, m.why));
-      entry.manual.push(join(patches, name));
-      (entry.targets ??= []).push({ file: m.path, patch: join(patches, name), sha256: createHash('sha256').update(m.text).digest('hex') });
+    for (const [path, edits] of byPath) {
+      // An old plan.json can predate a link loop or a folder where an agent file was; refuse before any write.
+      if (await linkLoop(path, 'apply')) {
+        throw new Error(`apply: ${show(path)} is a link loop, so nothing was written. Delete the link or point it at a file, then run sync-agent-docs plan again.`);
+      }
+      if (await isDir(path, 'apply')) {
+        throw new Error(`apply: ${show(path)} is a folder, not a file, so nothing was written. Move it, then run sync-agent-docs plan again.`);
+      }
+      // An old plan.json can predate the link; the rule is the one compile and plan follow.
+      const refused = await refusedLink(path, 'apply');
+      if (refused) {
+        const items = (itemsByPath.get(path) ?? []).map((i) => i.title).join('; ');
+        throw new Error(`apply: ${show(path)} is a link to ${refused.inRepo ? refused.target : show(refused.real)}, which is not an agent file, so nothing was written. Items: ${items}. Run sync-agent-docs plan again; it proposes no edit there.`);
+      }
+      let real: string;
+      let text: string;
+      try {
+        real = await realpath(path);
+        text = await readFile(real, 'utf8');
+      } catch (err) {
+        throw new Error(`apply: could not read ${show(path)} (${(err as NodeJS.ErrnoException).code ?? (err as Error).message}), so nothing was written; run sync-agent-docs plan again.`, { cause: err });
+      }
+      checkEdits(text, edits, show(path));
+      const repo = await toplevelOf(real);
+      if (!repo || !(await isTracked(repo, real))) {
+        manual.push({ path, text, edits, why: repo ? 'git does not track it' : 'it is not inside a git repository' });
+        continue;
+      }
+      repoFiles.set(repo, [...(repoFiles.get(repo) ?? []), { real, text, edits, items: itemsByPath.get(path) ?? [] }]);
     }
-    await run.record();
 
-    run.at = storeDir;
+    // Files that only get a patch: the store records them, and a secret in one is not reported removed.
+    const manualPaths = new Set(manual.map((m) => m.path));
+
+    // A new store is `git init`ed where it stands, so the repo around it must be clean first.
+    const storeExists = await exists(storeDir);
+    let storeParent: string | null = null;
     if (!storeExists) {
-      await mkdir(storeDir, { recursive: true });
-      await git(storeDir, ['init', '-q', '-b', 'main'], 'apply');
-      await commitAll(storeDir, [], 'chore(sync-agent-docs): start the truth store');
+      try {
+        storeParent = await toplevelOf(await nearestExisting(dirname(storeDir)));
+      } catch (err) {
+        if (err instanceof GitError) throw err;
+        throw new Error(`apply: could not check where the new store ${storeDir} would be created (${(err as NodeJS.ErrnoException).code ?? (err as Error).message}), so nothing was written. Check that the folders above it exist and are readable, or pick another store path with sync-agent-docs plan --store <folder>.`, { cause: err });
+      }
+      if (storeParent && (await isDirty(storeParent))) {
+        throw new Error(`apply: ${storeParent} has uncommitted changes and the new store ${storeDir} would be created inside it, so nothing was written. Commit or stash them there, or pick another store path with sync-agent-docs plan --store <folder> outside that repo.`);
+      }
     }
-    const storeRepo = await realpath(storeDir);
-    // The store repo gets its writes in the same branch and commit as its own line edits, if it has any.
-    const repos = [...new Set([...repoFiles.keys(), ...compiled.keys()])].filter((r) => r !== storeRepo);
-    for (const repo of [...repos, storeRepo]) {
-      await run.commitOnBranch(repo, branch, originals.get(repo) ?? 'main', async (t) => {
-        const files = repoFiles.get(repo) ?? [];
-        const blocks = new Map(compiled.get(repo));
-        for (const f of files) {
-          const next = blocks.get(f.real)?.next ?? editText(f.text, f.edits);
-          blocks.delete(f.real);
-          await run.write(t, f.real, next, (await lstat(f.real)).mode & 0o7777);
-        }
-        for (const [path, c] of blocks) await run.write(t, path, c.next, c.mode ?? undefined);
-        let items = files.flatMap((f) => f.items);
-        if (repo === storeRepo) {
-          for (const [path, json] of storeFiles(storeRepo, store)) await run.write(t, path, json);
-          for (const [file, v] of views) await run.write(t, join(storeRepo, file), v.text);
-          items = [...items, ...plan.items.filter((i) => i.answer !== null)];
-        }
-        return commitMessage(id, items);
-      });
+
+    const originals = new Map<string, string>();
+    for (const repo of repoFiles.keys()) originals.set(repo, await checkRepo(repo, branch, 'apply'));
+
+    if (storeExists) {
+      const top = await toplevelOf(storeDir);
+      if (top !== (await realpath(storeDir))) {
+        throw new Error(`apply: ${storeDir} exists but is not the top of a git repository, so nothing was written. Run sync-agent-docs plan --store with another folder, or run git init there.`);
+      }
+      if (!originals.has(top)) originals.set(top, await checkRepo(top, branch, 'apply'));
     }
-  } catch (err) {
-    return run.fail(err, storeExists ? null : storeDir);
-  }
-  return entry;
+
+    const prev = storeExists ? await readStore(storeDir) : null;
+    // A view block edited by hand after plan ran (or edited again since) has no answer in plan.json:
+    // overwriting it would lose the edit. The key holds the edited text's hash, so a re-edit is new.
+    const planned = new Set(plan.items.filter((i) => i.kind === 'view-edit').map((i) => i.key));
+    const late = prev ? (await detectViewEdits(storeDir, prev, 'apply')).filter((i) => !planned.has(i.key)) : [];
+    if (late.length) {
+      throw new Error(`apply: ${late.map((i) => i.subject).join(', ')} ${late.length === 1 ? 'was' : 'were'} edited by hand after the plan was made, so nothing was written. Run sync-agent-docs plan again to choose what to keep.`);
+    }
+    // A remembered answer someone changed by hand in plan.json is a new decision too.
+    const known = await readDecisions(root, storeDir);
+    const stored = new Map(known.map((d) => [d.key, d.answer]));
+    const answered = plan.items.filter((i) => i.answer !== null && (i.answeredBy !== 'remembered' || stored.get(i.key) !== i.answer));
+    const decisions = [...known, ...answered.map((i) => toDecision(i, i.answer ?? '', now))];
+    const store = composeStore(prev, plan, decisions, opts.home, await foldedBlocks(storeDir, plan), manualPaths);
+    const openEdits = new Set(plan.items.filter((i) => i.kind === 'view-edit' && i.answer === null).map((i) => i.subject));
+    const views = await renderViews(storeDir, store, openEdits);
+    store.config.generated = Object.fromEntries([...views].map(([file, v]) => [file, v.hashes]));
+    if (storeExists) {
+      // A store or view file that is there but untracked would be overwritten, and an ignored one
+      // would then fail to commit.
+      const real = await realpath(storeDir);
+      for (const path of [...storeFiles(real, store).map(([p]) => p), ...[...views.keys()].map((f) => join(real, f))]) {
+        if ((await exists(path)) && !(await isTracked(real, path))) {
+          if (await isIgnored(real, path)) {
+            throw new Error(`apply: ${path} is in the store but git ignores it, so nothing was written. Take it out of the store's .gitignore and commit it, or move it away, then run sync-agent-docs apply again.`);
+          }
+          throw new Error(`apply: ${path} is in the store but git does not track it, so nothing was written. Commit it or move it away, then run sync-agent-docs apply again.`);
+        }
+      }
+    }
+
+    // Agent files get their compiled blocks in the same commit as their line edits; a block edited by
+    // hand is kept until plan's compiled-edit question is answered discard.
+    const answers = new Map<string, string>();
+    for (const d of known) if (d.answer !== null) answers.set(d.key, d.answer);
+    for (const i of plan.items) if (i.answer !== null) answers.set(i.key, i.answer);
+    const edited = new Map([...repoFiles.values()].flat().map((f) => [f.real, editText(f.text, f.edits)]));
+    // By real repo and real file path, the keys the line edits use.
+    const compiled = new Map<string, Map<string, CompileTarget>>();
+    for (const [repo, targets] of (await compileChanges(root, store, { storeDir, home: opts.home }, answers, edited)).changes) {
+      const real = await realpath(repo);
+      const files = new Map<string, CompileTarget>();
+      for (const c of targets) files.set(await resolveReal(c.path, 'apply'), c);
+      compiled.set(real, files);
+      if (!originals.has(real)) originals.set(real, await checkRepo(real, branch, 'apply'));
+    }
+
+    // Every check passed: from here on, write.
+    const dot = await openDotDir(root, 'apply');
+    const entry: ApplyEntry = {
+      id, at: now.toISOString(), store: storeDir, repos: [], manual: [],
+      skipped: plan.items.filter((i) => i.answer === null).map((i) => i.title),
+      ...(storeParent ? { storeParent } : {}),
+      secrets: [
+        ...plan.items.filter((i) => i.secretAt && i.answer === 'rotate-manual').flatMap((i) => i.notes.filter((n) => n.startsWith('the secret stays in '))),
+        ...plan.items.filter((i) => i.kind === 'secret' && i.answer === 'rotate-remove').flatMap((i) => (i.edits['rotate-remove'] ?? []).filter((e) => manualPaths.has(e.path)).map((e) => `${show(e.path)}:${e.line} (patch written; rotate the key and apply the patch by hand)`)),
+      ],
+    };
+    // Checked before any branch exists, so a planted link stops the run with nothing to undo.
+    const patches = manual.length ? await openSubDir(dot, 'manual', 'apply') : '';
+    const run = await BranchRun.start(root, 'apply', entry);
+    run.at = 'the manual patches';
+    try {
+      for (const [n, m] of manual.entries()) {
+        const name = `${id}-${n + 1}-${basename(m.path)}.patch`;
+        await writeFresh(patches, name, manualPatch(m.path, m.text, m.edits, m.why));
+        entry.manual.push(join(patches, name));
+        (entry.targets ??= []).push({ file: m.path, patch: join(patches, name), sha256: createHash('sha256').update(m.text).digest('hex') });
+      }
+      await run.record();
+
+      run.at = storeDir;
+      if (!storeExists) {
+        await mkdir(storeDir, { recursive: true });
+        await git(storeDir, ['init', '-q', '-b', 'main'], 'apply');
+        await commitAll(storeDir, [], 'chore(sync-agent-docs): start the truth store');
+      }
+      const storeRepo = await realpath(storeDir);
+      // The store repo gets its writes in the same branch and commit as its own line edits, if it has any.
+      const repos = [...new Set([...repoFiles.keys(), ...compiled.keys()])].filter((r) => r !== storeRepo);
+      for (const repo of [...repos, storeRepo]) {
+        await run.commitOnBranch(repo, branch, originals.get(repo) ?? 'main', async (t) => {
+          const files = repoFiles.get(repo) ?? [];
+          const blocks = new Map(compiled.get(repo));
+          for (const f of files) {
+            const next = blocks.get(f.real)?.next ?? editText(f.text, f.edits);
+            blocks.delete(f.real);
+            await run.write(t, f.real, next, (await lstat(f.real)).mode & 0o7777);
+          }
+          for (const [path, c] of blocks) await run.write(t, path, c.next, c.mode ?? undefined);
+          let items = files.flatMap((f) => f.items);
+          if (repo === storeRepo) {
+            for (const [path, json] of storeFiles(storeRepo, store)) await run.write(t, path, json);
+            for (const [file, v] of views) await run.write(t, join(storeRepo, file), v.text);
+            items = [...items, ...plan.items.filter((i) => i.answer !== null)];
+          }
+          return commitMessage(id, items);
+        });
+      }
+    } catch (err) {
+      return run.fail(err, storeExists ? null : storeDir);
+    }
+    return entry;
+  });
 }
 
 export function renderApplySummary(entry: ApplyEntry): string {

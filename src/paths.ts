@@ -52,14 +52,27 @@ export async function isDir(path: string, stage: string): Promise<boolean> {
   }
 }
 
-/** Where a link at `path` points when nothing is there, or null when `path` is not a dangling link. */
+/** Whether `path` is a link loop: following its links never reaches a file. Any other failure is named for `stage`. */
+export async function linkLoop(path: string, stage: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return false;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ELOOP') return true;
+    if (code === 'ENOENT') return false;
+    throw new Error(`${stage}: could not check ${path} (${codeOf(err)}). Check its permissions.`, { cause: err });
+  }
+}
+
+/** Where a link at `path` points when nothing is there, or null when `path` is not a dangling link. Check `linkLoop` first: a loop throws here. */
 export async function danglingLink(path: string, stage: string): Promise<string | null> {
   try {
     await stat(path);
     return null;
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
-    if (code !== 'ENOENT') throw new Error(`${stage}: could not check ${path} (${code ?? (err as Error).message}). Check its permissions.`, { cause: err });
+    if (code !== 'ENOENT') throw new Error(`${stage}: could not check ${path} (${codeOf(err)}). Check its permissions.`, { cause: err });
   }
   try {
     return await readlink(path);

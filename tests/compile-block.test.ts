@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { outsideCompiled, readCompiledBlock, writeCompiledBlock } from '../src/compile/block.js';
+import { editReason, outsideCompiled, type CompiledBlock, readCompiledBlock, writeCompiledBlock } from '../src/compile/block.js';
 import { blockHash, mergeView, readBlocks } from '../src/views/render.js';
 
 const BODY = '## Facts from the truth store\n\n| port | 3300 | verified |';
@@ -82,5 +82,13 @@ describe('compiled block', () => {
     const once = writeCompiledBlock('# notes\n```\nnever closed\n', BODY);
     expect(readCompiledBlock(once)?.actual).toBeDefined();
     expect(writeCompiledBlock(once, BODY)).toBe(once);
+  });
+
+  it('says whether the hash line is gone or the body changed', () => {
+    const text = writeCompiledBlock('', BODY);
+    const reason = (t: string) => editReason(readCompiledBlock(t) as CompiledBlock);
+    expect(reason(text)).toBeNull();
+    expect(reason(text.replace('3300', '3301'))).toBe('body-changed');
+    expect(reason(text.replace(/<!-- sync-agent-docs:hash [0-9a-f]{16} -->\n/, ''))).toBe('hash-missing');
   });
 });

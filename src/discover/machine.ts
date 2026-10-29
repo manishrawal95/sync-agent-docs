@@ -1,7 +1,8 @@
 import { execFile } from 'node:child_process';
 import { access, constants, readdir, realpath, stat } from 'node:fs/promises';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { promisify } from 'node:util';
+import { CURSOR_RULE } from './sources.js';
 import { corpusTokens } from '../truth/formats/corpus-only.js';
 import type { AgentFormat, SkippedFile, SourceFile, SourceFormat, SourceKind } from '../types.js';
 
@@ -18,13 +19,27 @@ export interface MachinePass {
 
 interface Candidate { path: string; kind: SourceKind; format: SourceFormat; agent: AgentFormat | null }
 
-async function list(dir: string, pattern: RegExp, dirsOnly = false): Promise<string[]> {
+interface ListOptions {
+  dirsOnly?: boolean;
+  /** Also list matching files in subfolders. Links are not followed. A subfolder that cannot be read is reported to `skipped`, not thrown. */
+  deep?: SkippedFile[];
+}
+
+async function list(dir: string, pattern: RegExp, opts: ListOptions = {}, nested = false): Promise<string[]> {
   try {
     const entries = await readdir(dir, { withFileTypes: true });
-    return entries.filter((e) => pattern.test(e.name) && (!dirsOnly || e.isDirectory() || e.isSymbolicLink())).map((e) => join(dir, e.name)).sort();
+    const here = entries
+      .filter((e) => pattern.test(e.name) && (opts.deep ? !e.isDirectory() : !opts.dirsOnly || e.isDirectory() || e.isSymbolicLink()))
+      .map((e) => join(dir, e.name));
+    const below = opts.deep ? await Promise.all(entries.filter((e) => e.isDirectory()).map((e) => list(join(dir, e.name), pattern, opts, true))) : [];
+    return [...here, ...below.flat()].sort();
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === 'ENOENT' || code === 'ENOTDIR' || code === 'ELOOP') return [];
+    if (nested && opts.deep && (code === 'EACCES' || code === 'EPERM')) {
+      opts.deep.push({ path: dir, reason: 'unreadable', note: `${code}: this subfolder could not be listed, so rules inside it were not read. Fix its permissions to include them` });
+      return [];
+    }
     throw new Error(`machine pass: could not list ${dir} (${(err as Error).message}). Check its permissions or pass --repos-only.`, { cause: err });
   }
 }
@@ -44,11 +59,11 @@ const FIXED: { path: string[]; make: Make }[] = [
   { path: ['.gitconfig'], make: truth('git-config') },
 ];
 
-/** Machine files that are direct children of a folder under home and match its pattern. */
-const LISTED: { dir: string[]; pattern: RegExp; make: Make }[] = [
-  { dir: ['.cursor', 'rules'], pattern: /./, make: claim('cursor') },
-  { dir: ['Library', 'LaunchAgents'], pattern: /\.plist$/, make: truth('launch-agent') },
-  { dir: ['.config', 'systemd', 'user'], pattern: /\.(service|timer)$/, make: truth('launch-agent') },
+/** Machine files under a folder of home that match its pattern: direct children, or any depth when `deep`. */
+const LISTED: { dir: string[]; pattern: RegExp; deep: boolean; make: Make }[] = [
+  { dir: ['.cursor', 'rules'], pattern: CURSOR_RULE, deep: true, make: claim('cursor') },
+  { dir: ['Library', 'LaunchAgents'], pattern: /\.plist$/, deep: false, make: truth('launch-agent') },
+  { dir: ['.config', 'systemd', 'user'], pattern: /\.(service|timer)$/, deep: false, make: truth('launch-agent') },
 ];
 
 /** Claude memory: ~/.claude/projects/<project>/memory/*.md. */
@@ -57,19 +72,24 @@ const MEMORY_FILE = /\.md$/;
 // MEMORY.md loads every session; other memory files load on recall, so they are not agent files.
 const memoryFile = (file: string): Candidate => claim(file.endsWith('/MEMORY.md') ? 'claude' : null)(file);
 
-async function candidates(home: string): Promise<Candidate[]> {
+async function candidates(home: string, skipped: SkippedFile[] = []): Promise<Candidate[]> {
   const out: Candidate[] = FIXED.map((f) => f.make(join(home, ...f.path)));
-  for (const project of await list(join(home, ...MEMORY_ROOT), /./, true)) {
+  for (const project of await list(join(home, ...MEMORY_ROOT), /./, { dirsOnly: true })) {
     for (const file of await list(join(project, 'memory'), MEMORY_FILE)) out.push(memoryFile(file));
   }
-  for (const l of LISTED) out.push(...(await list(join(home, ...l.dir), l.pattern)).map(l.make));
+  for (const l of LISTED) out.push(...(await list(join(home, ...l.dir), l.pattern, l.deep ? { deep: skipped } : {})).map(l.make));
   return out;
 }
 
-/** Whether `path` is a machine file the machine pass reads or would read, decided by place and name, so a deleted file still counts. */
+const isBelow = (dir: string, path: string): boolean => {
+  const rel = relative(dir, path);
+  return rel !== '' && rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+};
+
+/** Whether `path` is a machine file the machine pass reads or would read, decided by place and name, so a deleted file still counts. A path under a symlinked subfolder of a deep folder counts here, though `candidates` does not follow the link. */
 export function isMachinePath(home: string, path: string): boolean {
   if (FIXED.some((f) => path === join(home, ...f.path))) return true;
-  if (LISTED.some((l) => dirname(path) === join(home, ...l.dir) && l.pattern.test(basename(path)))) return true;
+  if (LISTED.some((l) => l.pattern.test(basename(path)) && (l.deep ? isBelow(join(home, ...l.dir), path) : dirname(path) === join(home, ...l.dir)))) return true;
   const memory = dirname(path);
   return dirname(memory) !== memory && basename(memory) === 'memory' && dirname(dirname(memory)) === join(home, ...MEMORY_ROOT) && MEMORY_FILE.test(basename(path));
 }
@@ -96,7 +116,7 @@ async function crontab(command: string): Promise<{ corpus: string[] } | { skippe
  */
 export async function machineSources(home: string, opts: { crontabCommand?: string } = {}): Promise<MachinePass> {
   const pass: MachinePass = { sources: [], read: [], skipped: [], corpus: [] };
-  for (const c of await candidates(home)) {
+  for (const c of await candidates(home, pass.skipped)) {
     try {
       if (!(await stat(c.path)).isFile()) continue;
       await access(c.path, constants.R_OK);

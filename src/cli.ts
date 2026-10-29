@@ -12,7 +12,7 @@ import { renderLiveTargets } from './doctor/live.js';
 import { renderDoctor, runDoctor } from './doctor/run.js';
 import type { Asker } from './plan/prompt.js';
 import { renderPlanSummary, runPlan } from './plan/run.js';
-import { printable, renderTerminal } from './report/terminal.js';
+import { jsonText, printable, renderTerminal } from './report/terminal.js';
 import { assertFolder, NotAFolderError, runScan } from './scan.js';
 
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
@@ -26,14 +26,18 @@ async function folderArg(path: string | undefined): Promise<string> {
 
 /**
  * Text for the terminal, minus control characters: repo and file names can carry ANSI or OSC escapes.
- * JSON output escapes them already, and the scan report is made printable as it is drawn, with its own colors.
+ * --json output goes through jsonText, which escapes them, and the scan report is made printable as it is drawn, with its own colors.
  */
 const say = (stream: NodeJS.WriteStream, text: string): void => void stream.write(`${printable(text)}\n`);
 
-/** One error line on stderr: a bad path is stated as is, anything else as the command failing. */
+/** One error line on stderr: a bad path is stated as is, anything else as the command failing, with a leading stage name in the message (`plan --ai: …`) said once. */
 function fail(command: string, err: unknown, exitCode = 1): void {
   const message = err instanceof Error ? err.message : String(err);
-  say(process.stderr, err instanceof NotAFolderError ? `sync-agent-docs ${command}: ${message}` : `sync-agent-docs ${command} failed: ${message}`);
+  if (err instanceof NotAFolderError) say(process.stderr, `sync-agent-docs ${command}: ${message}`);
+  else {
+    const stage = new RegExp(`^(${command}(?: --[a-z-]+)?): `).exec(message)?.[1];
+    say(process.stderr, stage ? `sync-agent-docs ${stage} failed: ${message.slice(stage.length + 2)}` : `sync-agent-docs ${command} failed: ${message}`);
+  }
   process.exitCode = exitCode;
 }
 
@@ -54,7 +58,7 @@ program
     try {
       const root = await folderArg(path);
       const result = await runScan(root, { home: homedir(), reposOnly: opts.reposOnly === true });
-      process.stdout.write(opts.json ? `${JSON.stringify(result, null, 2)}\n` : `${renderTerminal(result, { color: process.stdout.isTTY && !process.env.NO_COLOR })}\n`);
+      process.stdout.write(opts.json ? `${jsonText(result)}\n` : `${renderTerminal(result, { color: process.stdout.isTTY && !process.env.NO_COLOR })}\n`);
     } catch (err) {
       fail('scan', err);
     }
@@ -80,7 +84,7 @@ program
         ...(opts.store ? { store: resolve(opts.store) } : {}), ...(asker ? { asker } : {}),
         ...(opts.ai ? { ai: { path: process.env.PATH ?? '' }, note: (t: string) => say(process.stderr, t) } : {}),
       });
-      if (opts.json) process.stdout.write(`${JSON.stringify(plan, null, 2)}\n`);
+      if (opts.json) process.stdout.write(`${jsonText(plan)}\n`);
       else say(process.stdout, renderPlanSummary(plan));
     } catch (err) {
       fail('plan', err);
@@ -144,7 +148,7 @@ program
         home: homedir(), store: opts.store ? resolve(opts.store) : undefined, reposOnly: opts.reposOnly === true, live: opts.live === true,
         onLiveTargets: (targets) => say(process.stderr, renderLiveTargets(targets)),
       });
-      if (opts.json) process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+      if (opts.json) process.stdout.write(`${jsonText(result)}\n`);
       else say(process.stdout, renderDoctor(result));
       process.exitCode = result.drift ? 1 : 0;
     } catch (err) {

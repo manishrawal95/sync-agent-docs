@@ -5,6 +5,7 @@ import { readApplies } from '../../apply/branches.js';
 import { lineHasSecret } from '../../claims/secrets.js';
 import { storePath } from '../../compile/deps.js';
 import { isMachinePath } from '../../discover/machine.js';
+import { readTextSafe } from '../../discover/sources.js';
 import { buildPlan, settledByStore } from '../../plan/build.js';
 import type { PlanItem } from '../../plan/types.js';
 import { shortPath } from '../../paths.js';
@@ -81,6 +82,7 @@ export const factChecksCheck: Check = {
     const { root } = ctx.store.config;
     const out: Found[] = [];
     let skipped = 0;
+    const unreadable = new Set<string>();
     for (const f of ctx.store.facts) {
       const c = f.check;
       if (!c) continue;
@@ -93,9 +95,18 @@ export const factChecksCheck: Check = {
       if (facts.some((x) => x.kind === 'truth' && x.at.path === path && x.attribute === c.attribute && x.value === c.value)) continue;
       // Commands are read from package.json scripts by plan, not by the scan, so check them the same way.
       if (c.attribute === 'command' && basename(path) === 'package.json' && (await packageCommands(path))?.includes(c.value)) continue;
+      const shown = shortPath(path, ctx.root, ctx.home);
+      // A file the scan could not read says nothing about the fact, so name the file and the fix instead of calling it drift.
+      const read = await readTextSafe(path);
+      if ('skipped' in read && (read.skipped.note === 'EACCES' || read.skipped.note === 'EPERM')) {
+        if (!unreadable.has(shown)) {
+          unreadable.add(shown);
+          out.push({ key: `fact-checks:unreadable:${shown}`, level: 'note', message: `${shown} was not checked: sync-agent-docs may not read it (${read.skipped.note}). Fix its permissions, then run sync-agent-docs doctor again.`, path: shown });
+        }
+        continue;
+      }
       const secret = lineHasSecret(c.value);
       const value = secret ? `sha256:${createHash('sha256').update(c.value).digest('hex').slice(0, 16)}` : c.value;
-      const shown = shortPath(path, ctx.root, ctx.home);
       out.push({
         key: `fact-checks:${f.entityId}|${c.attribute}|${c.path}|${value}`,
         message: `${f.entityId} ${c.attribute} ${secret ? '(value hidden: it looks like a secret)' : c.value}: ${shown} no longer says so. Run sync-agent-docs scan and sync-agent-docs plan to settle it.`,

@@ -1,12 +1,12 @@
 import { lstat, readFile, realpath, stat } from 'node:fs/promises';
 import { dirname, join, relative } from 'node:path';
 import { isIgnored, isTracked, toplevelOf } from '../git.js';
-import { codeOf, danglingLink, isDir, NOT_THERE, resolveReal, shortPath } from '../paths.js';
+import { codeOf, danglingLink, isDir, linkLoop, NOT_THERE, resolveReal, shortPath } from '../paths.js';
 import { decisionKey } from '../plan/decisions.js';
 import type { Store } from '../store/types.js';
 import type { AgentFormat } from '../types.js';
 import { viewFile } from '../views/render.js';
-import { type CompiledBlock, outsideCompiled, readCompiledBlock, writeCompiledBlock } from './block.js';
+import { type CompiledBlock, editReason, outsideCompiled, readCompiledBlock, writeCompiledBlock } from './block.js';
 import { repoDependencies, repoEntry } from './deps.js';
 import { type AgentCompiler, importsCard } from './content.js';
 import { COMPILED_FILES, COMPILERS } from './formats/index.js';
@@ -66,10 +66,20 @@ async function inspect(repoPath: string, store: Store, ctx: CompileContext, text
   for (const c of COMPILERS) {
     if (!store.config.agentFormats.includes(c.format)) continue;
     const path = join(repoPath, c.file);
+    if (await linkLoop(path, 'compile')) {
+      notes.push(`${path} is a link loop, so compile skipped it. Delete the link or point it at a file.`);
+      skipped.push({ file: path, reason: 'it is a link loop, so compile leaves it alone' });
+      continue;
+    }
     const to = await danglingLink(path, 'compile');
     if (to !== null) {
       notes.push(`${path} is a link to ${to}, which does not exist, so compile skipped it. Point the link at a file, or delete it.`);
       skipped.push({ file: path, reason: `it is a link to ${to}, which does not exist, so compile leaves it alone` });
+      continue;
+    }
+    if (await isDir(path, 'compile')) {
+      notes.push(`${path} is a folder, not a file, so compile skipped it. Rename the folder, or delete it.`);
+      skipped.push({ file: path, reason: 'it is a folder, not a file, so compile leaves it alone' });
       continue;
     }
     // A link is followed only to another agent file: never into .git, a script or a manifest.
@@ -114,7 +124,7 @@ async function inspect(repoPath: string, store: Store, ctx: CompileContext, text
     const body = writer.body({ repoPath, store, entityIds, outside, card, project: `project:${entry.name}`, shared: writer.format === 'claude' && importsCard(outside, card) && (await sharesFile(repoPath, g.path, writer.file)) });
     const next = writeCompiledBlock(existing, body, owner.newFilePrefix);
     const mode = existing === null ? null : (await lstat(g.path)).mode & 0o7777;
-    found.push({ target: { format: owner.format, path: g.path, existing, next, mode, edited: block && block.recorded !== block.actual ? block : null } });
+    found.push({ target: { format: owner.format, path: g.path, existing, next, mode, edited: block && editReason(block) ? block : null } });
   }
   return { found, notes, skipped };
 }

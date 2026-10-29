@@ -14,6 +14,9 @@ const BINARY_PROBE_BYTES = 8 * 1024;
 /** Docs that record history rather than current state; their old values are not claims. */
 const HISTORY_DOCS = new Set(['CHANGELOG.md', 'HISTORY.md']);
 
+/** Cursor rule files: `.md` and `.mdc`, at any depth under a `rules` folder. */
+export const CURSOR_RULE = /\.mdc?$/;
+
 const AGENT_FILES: Record<string, AgentFormat> = {
   'CLAUDE.md': 'claude',
   'AGENTS.md': 'agents',
@@ -41,8 +44,8 @@ export function classifyPath(repo: RepoInfo, rel: string, realPath: string): Sou
   const base = { path, realPath, repo: repo.name, scope: 'repo' as const };
   const name = basename(rel);
   const parts = rel.split(sep);
-  if (parts[0] === '.cursor' && parts[1] === 'rules' && parts.length === 3) {
-    return { ...base, kind: 'claim', format: 'markdown', agent: 'cursor' };
+  if (parts[0] === '.cursor' && parts[1] === 'rules') {
+    return parts.length >= 3 && CURSOR_RULE.test(name) ? { ...base, kind: 'claim', format: 'markdown', agent: 'cursor' } : null;
   }
   if (rel === join('.github', 'copilot-instructions.md')) {
     return { ...base, kind: 'claim', format: 'markdown', agent: 'copilot' };
