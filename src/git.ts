@@ -28,6 +28,9 @@ function guardedEnv(cwd: string): Promise<NodeJS.ProcessEnv> {
   return env;
 }
 
+/** git's ways of saying `cwd` is in no repo, a .git file that points nowhere included (newer git words that one differently). */
+const NOT_A_REPO = /only be used inside a git repository|not a git repository|gitfile does not point to a valid repository/i;
+
 async function readGuards(cwd: string): Promise<NodeJS.ProcessEnv> {
   let keys: string[] = [];
   try {
@@ -40,7 +43,7 @@ async function readGuards(cwd: string): Promise<NodeJS.ProcessEnv> {
   } catch (err) {
     // Exit 1 means no config defines a filter; outside a repo there is no local config to guard.
     const e = err as { code?: unknown; stderr?: string };
-    if (e.code !== 1 && !/only be used inside a git repository|not a git repository/i.test(e.stderr ?? '')) throw err;
+    if (e.code !== 1 && !NOT_A_REPO.test(e.stderr ?? '')) throw err;
   }
   const pairs: [string, string][] = [['core.fsmonitor', 'false'], ['submodule.recurse', 'false'], ...keys.map((k): [string, string] => [k, ''])];
   const env: NodeJS.ProcessEnv = { ...process.env };
@@ -149,7 +152,7 @@ async function succeeds(cwd: string, args: string[]): Promise<string | null> {
 /** The repo root holding the file or folder `path` (after following symlinks), or null when it is not in a git repo. */
 export async function toplevelOf(path: string): Promise<string | null> {
   const real = await realpath(path);
-  const top = await check((await stat(real)).isDirectory() ? real : dirname(real), ['rev-parse', '--show-toplevel'], 'the repository', (_code, stderr) => /not a git repository/i.test(stderr));
+  const top = await check((await stat(real)).isDirectory() ? real : dirname(real), ['rev-parse', '--show-toplevel'], 'the repository', (_code, stderr) => NOT_A_REPO.test(stderr));
   return top ? realpath(top.trim()) : null;
 }
 

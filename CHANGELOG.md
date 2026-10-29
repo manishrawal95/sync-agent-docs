@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-10-29
+
+- A `.git` file that points nowhere, such as a broken submodule, no longer stops scan, plan or compile with git versions that word that error as "gitfile does not point to a valid repository" (the git on Ubuntu runners does). The repo is noted as unreadable, as it already was with other git versions.
+
 ## 2026-10-28
 
 - A remembered rotate-remove on a secret line that appears more than once is asked again, so removing one copy can no longer delete another copy marked false-positive.
