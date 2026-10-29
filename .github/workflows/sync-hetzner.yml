@@ -35,5 +35,6 @@ jobs:
         env:
           SYNC_TARGET: ${{ secrets.SYNC_TARGET }}
         run: |
+          echo "::add-mask::${SYNC_TARGET#*@}"
           ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
             -i ~/.ssh/deploy_sync_key "$SYNC_TARGET" "sync-agent-docs"
