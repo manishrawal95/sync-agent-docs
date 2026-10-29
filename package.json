@@ -1,7 +1,7 @@
 {
   "name": "sync-agent-docs",
   "version": "0.1.0",
-  "description": "Find conflicting, stale and duplicated infra facts across your repos and coding-agent config.",
+  "description": "Find drift in the infra facts across your repos and coding-agent files, settle it into one truth store, and compile it back into CLAUDE.md, AGENTS.md, GEMINI.md, Cursor and Copilot.",
   "license": "MIT",
   "author": "Manish Rawal",
   "repository": {

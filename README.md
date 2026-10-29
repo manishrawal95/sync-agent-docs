@@ -1,12 +1,12 @@
 # sync-agent-docs
 
-Your infra facts live in a dozen agent instruction files and READMEs, and the copies drift. `sync-agent-docs scan` finds the conflicts, stale references, duplicated context and plain-text secrets across your repos and your coding-agent config, locally, with no AI and no network.
+Your infra facts live in a dozen agent instruction files and READMEs, and the copies drift. sync-agent-docs finds the conflicts, stale references, duplicated context and plain-text secrets across your repos and your coding-agent config. It settles each one into a single truth store using your answers, writes those facts back into every agent's file (CLAUDE.md, AGENTS.md, GEMINI.md, Cursor rules, Copilot instructions) and checks that they stay in sync.
 
 ```sh
 npx sync-agent-docs scan ~/dev
 ```
 
-Node 24. The scan writes only inside `<path>/.sync-agent-docs/`, which holds its own `.gitignore`, so nothing it writes gets committed.
+Node 24. Everything runs on your machine. Nothing uses AI or the network unless you ask: `plan --ai` sends the lines it shows you to your own `claude` command only after you say yes, and `doctor --live` contacts only hosts the store already records. The scan writes only inside `<path>/.sync-agent-docs/`, which holds its own `.gitignore`, so nothing it writes gets committed.
 
 ## What it reads, what it never reads
 
@@ -157,7 +157,7 @@ The `live` check runs only with `--live`, so without it `checks` has seven entri
 
 ## Contributing
 
-Issues and pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) covers setup and checks, [AGENTS.md](AGENTS.md) the promises every change keeps, and [SECURITY.md](SECURITY.md) how to report a security problem privately.
+Issues and pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) covers setup and checks, [AGENTS.md](AGENTS.md) the promises every change keeps, and [SECURITY.md](SECURITY.md) how to report a security problem privately. [CHANGELOG.md](CHANGELOG.md) lists what changed in each release.
 
 ## License
 
