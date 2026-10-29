@@ -133,6 +133,20 @@ describe('git', () => {
     await expect(currentBranch(await temp())).rejects.toThrow(/could not read the branch .*not a git repository/);
   });
 
+  it("toplevelOf calls a .git file that points nowhere no repo, in newer git's wording too", async () => {
+    // Apple git says "not a git repository: (null)" here; the git on Linux CI says this instead.
+    const dir = await temp();
+    const bin = await temp();
+    await writeFile(join(bin, 'git'), `#!/bin/sh\necho "fatal: gitfile does not point to a valid repository: ${dir}/.git" >&2\nexit 128\n`, { mode: 0o755 });
+    const path = process.env.PATH;
+    process.env.PATH = `${bin}:${path ?? ''}`;
+    try {
+      expect(await toplevelOf(dir)).toBeNull();
+    } finally {
+      process.env.PATH = path;
+    }
+  });
+
   it('toplevelOf reports a broken repo instead of calling it no repo', async () => {
     const dir = await repo();
     await writeFile(join(dir, '.git', 'config'), '[[[ not config\n');
